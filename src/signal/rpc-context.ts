@@ -8,6 +8,11 @@ export type SignalRetryConfig = {
   jitter?: number;
 };
 
+type SignalTransportConfig = {
+  tcpHost?: unknown;
+  tcpPort?: unknown;
+};
+
 function parseRetryConfig(raw: unknown): SignalRetryConfig | undefined {
   if (!raw || typeof raw !== "object") {
     return undefined;
@@ -32,9 +37,22 @@ export function resolveSignalRpcContext(params: {
   const accountRaw = accountInfo.config.account;
   const account = typeof accountRaw === "string" ? accountRaw.trim() : "";
   const retry = parseRetryConfig((accountInfo.config as { retry?: unknown }).retry);
+  const transportConfig = accountInfo.config as SignalTransportConfig;
+  const tcpHost =
+    typeof transportConfig.tcpHost === "string" && transportConfig.tcpHost.trim()
+      ? transportConfig.tcpHost.trim()
+      : undefined;
+  const tcpPort =
+    typeof transportConfig.tcpPort === "number" &&
+    Number.isFinite(transportConfig.tcpPort) &&
+    transportConfig.tcpPort > 0
+      ? Math.trunc(transportConfig.tcpPort)
+      : undefined;
   return {
     baseUrl: accountInfo.baseUrl,
     account: account || undefined,
     retry,
+    tcpHost,
+    tcpPort,
   };
 }

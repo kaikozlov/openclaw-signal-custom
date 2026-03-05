@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  resetSignalSocketRegistryForTests,
   SignalHttpError,
   SignalNetworkError,
   SignalRpcError,
@@ -32,6 +33,7 @@ describe("signal client typed errors and retry", () => {
 
   afterEach(() => {
     global.fetch = originalFetch;
+    resetSignalSocketRegistryForTests();
   });
 
   it("throws SignalRpcError for JSON-RPC errors", async () => {
@@ -102,5 +104,54 @@ describe("signal client typed errors and retry", () => {
 
     expect(result.timestamp).toBe(1700000000001);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("routes RPC through socket client when connected", async () => {
+    const socketRequest = vi.fn(async () => ({ timestamp: 1700000000002 }));
+    const socketClient = {
+      isConnected: true,
+      request: socketRequest,
+      connect: vi.fn(),
+      close: vi.fn(),
+    } as unknown as import("./socket-client.js").SignalSocketClient;
+
+    const result = await signalRpcRequest("send", { message: "hi" }, {
+      baseUrl: "http://signal.local",
+      socketClient,
+    });
+
+    expect(result).toEqual({ timestamp: 1700000000002 });
+    expect(socketRequest).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to HTTP when socket request fails", async () => {
+    const socketRequest = vi.fn(async () => {
+      throw new Error("connection lost");
+    });
+    const socketClient = {
+      isConnected: true,
+      request: socketRequest,
+      connect: vi.fn(),
+      close: vi.fn(),
+    } as unknown as import("./socket-client.js").SignalSocketClient;
+
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        text: JSON.stringify({
+          jsonrpc: "2.0",
+          result: { timestamp: 1700000000003 },
+        }),
+      }),
+    );
+
+    const result = await signalRpcRequest("send", { message: "hi" }, {
+      baseUrl: "http://signal.local",
+      socketClient,
+    });
+
+    expect(socketRequest).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ timestamp: 1700000000003 });
   });
 });

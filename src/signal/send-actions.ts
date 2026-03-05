@@ -164,6 +164,8 @@ export async function editMessageSignal(params: {
     baseUrl: context.baseUrl,
     timeoutMs: params.opts?.timeoutMs,
     retry: context.retry,
+    tcpHost: context.tcpHost,
+    tcpPort: context.tcpPort,
   });
   const timestamp = result?.timestamp;
   return {
@@ -205,6 +207,8 @@ export async function deleteMessageSignal(params: {
     baseUrl: context.baseUrl,
     timeoutMs: params.opts?.timeoutMs,
     retry: context.retry,
+    tcpHost: context.tcpHost,
+    tcpPort: context.tcpPort,
   });
 }
 
@@ -239,6 +243,8 @@ export async function sendStickerSignal(params: {
     baseUrl: context.baseUrl,
     timeoutMs: params.opts?.timeoutMs,
     retry: context.retry,
+    tcpHost: context.tcpHost,
+    tcpPort: context.tcpPort,
   });
   const timestamp = result?.timestamp;
   return {
@@ -260,6 +266,8 @@ export async function listStickerPacksSignal(params: {
     baseUrl: context.baseUrl,
     timeoutMs: params.opts?.timeoutMs,
     retry: context.retry,
+    tcpHost: context.tcpHost,
+    tcpPort: context.tcpPort,
   });
   return normalizeStickerPackList(result);
 }

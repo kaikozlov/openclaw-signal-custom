@@ -63,6 +63,8 @@ export async function listSignalGroups(
     baseUrl: context.baseUrl,
     timeoutMs: opts.timeoutMs,
     retry: context.retry,
+    tcpHost: context.tcpHost,
+    tcpPort: context.tcpPort,
   });
   return Array.isArray(result) ? (result as SignalGroup[]) : [];
 }
@@ -80,6 +82,8 @@ export async function listSignalContacts(opts: SignalDirectoryOpts): Promise<Sig
     baseUrl: context.baseUrl,
     timeoutMs: opts.timeoutMs,
     retry: context.retry,
+    tcpHost: context.tcpHost,
+    tcpPort: context.tcpPort,
   });
   return Array.isArray(result) ? (result as SignalContact[]) : [];
 }
@@ -112,5 +116,7 @@ export async function updateContactSignal(
     baseUrl: context.baseUrl,
     timeoutMs: opts.timeoutMs,
     retry: context.retry,
+    tcpHost: context.tcpHost,
+    tcpPort: context.tcpPort,
   });
 }

@@ -1,8 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { SignalSocketClient } from "./socket-client.js";
 
 export type SignalRpcOptions = {
   baseUrl: string;
   timeoutMs?: number;
+  tcpHost?: string;
+  tcpPort?: number;
+  socketClient?: SignalSocketClient;
 };
 
 export type SignalRpcErrorPayload = {
@@ -29,6 +33,7 @@ const DEFAULT_RETRY_ATTEMPTS = 3;
 const DEFAULT_RETRY_MIN_DELAY_MS = 500;
 const DEFAULT_RETRY_MAX_DELAY_MS = 10_000;
 const DEFAULT_RETRY_JITTER = 0.2;
+const socketClientRegistry = new Map<string, SignalSocketClient>();
 
 export class SignalRpcError extends Error {
   readonly code: number | string;
@@ -110,6 +115,40 @@ function normalizeBaseUrl(url: string): string {
     return trimmed.replace(/\/+$/, "");
   }
   return `http://${trimmed}`.replace(/\/+$/, "");
+}
+
+function resolveSignalSocketRegistryKey(host: string, port: number): string {
+  return `${host}:${port}`;
+}
+
+function resolveSignalSocketClient(opts: SignalRpcOptions): SignalSocketClient | null {
+  if (opts.socketClient) {
+    return opts.socketClient;
+  }
+  const host = opts.tcpHost?.trim();
+  const port = opts.tcpPort;
+  if (!host || typeof port !== "number" || !Number.isFinite(port) || port <= 0) {
+    return null;
+  }
+  const key = resolveSignalSocketRegistryKey(host, Math.trunc(port));
+  let client = socketClientRegistry.get(key);
+  if (!client) {
+    client = new SignalSocketClient({
+      host,
+      port: Math.trunc(port),
+      reconnect: true,
+    });
+    socketClientRegistry.set(key, client);
+  }
+  client.connect();
+  return client;
+}
+
+export function resetSignalSocketRegistryForTests() {
+  for (const [, client] of socketClientRegistry) {
+    client.close();
+  }
+  socketClientRegistry.clear();
 }
 
 function isTimeoutLikeError(error: unknown): boolean {
@@ -283,8 +322,27 @@ export async function signalRpcRequest<T = unknown>(
   params: Record<string, unknown> | undefined,
   opts: SignalRpcOptions,
 ): Promise<T> {
-  const baseUrl = normalizeBaseUrl(opts.baseUrl);
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const socketClient = resolveSignalSocketClient(opts);
+  if (socketClient) {
+    try {
+      if (!socketClient.isConnected) {
+        await socketClient.waitForConnect();
+      }
+      return await socketClient.request<T>(method, params, { timeoutMs });
+    } catch (error) {
+      if (!opts.baseUrl?.trim()) {
+        if (isTimeoutLikeError(error)) {
+          throw new SignalTimeoutError(timeoutMs, { cause: error });
+        }
+        throw new SignalNetworkError(`Signal socket request failed: ${String(error)}`, {
+          cause: error,
+        });
+      }
+    }
+  }
+
+  const baseUrl = normalizeBaseUrl(opts.baseUrl);
   const id = randomUUID();
   const body = JSON.stringify({
     jsonrpc: "2.0",

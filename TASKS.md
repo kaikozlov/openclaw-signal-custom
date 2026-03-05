@@ -17,16 +17,16 @@ This is the execution checklist. We keep it updated as we land each slice.
 
 ## Phase 2: WS1 Outbound/Action Parity
 
-- [ ] Port `#27149` reaction hardening (in progress: action prevalidation + normalization guards landed)
-- [ ] Port `#27148` outbound native mentions (in progress: payload mention passthrough landed)
-- [ ] Port `#27146` stickers + sticker search (in progress: plugin-local sticker actions landed)
-- [ ] Port outbound subset of `#27145` edit/delete support (in progress: plugin-local actions landed)
+- [x] Port `#27149` reaction hardening
+- [x] Port `#27148` outbound native mentions
+- [x] Port `#27146` stickers + sticker search
+- [x] Port outbound subset of `#27145` edit/delete support
 
 ## Phase 3: WS2 RPC + Transport
 
-- [ ] Port `#27144` typed RPC errors + retry/backoff (in progress: plugin-local client landed)
+- [x] Port `#27144` typed RPC errors + retry/backoff
 - [ ] Port probe reliability improvements (`#33851`, `#34177`)
-- [ ] Port `#27155` TCP socket transport
+- [x] Port `#27155` TCP socket transport
 
 ## Phase 4: WS3 Directory + Group Actions
 

@@ -85,6 +85,8 @@ export async function updateGroupSignal(
     baseUrl: context.baseUrl,
     timeoutMs: opts.timeoutMs,
     retry: context.retry,
+    tcpHost: context.tcpHost,
+    tcpPort: context.tcpPort,
   });
 }
 
@@ -143,6 +145,8 @@ export async function joinGroupSignal(uri: string, opts: SignalDirectoryOpts): P
     baseUrl: context.baseUrl,
     timeoutMs: opts.timeoutMs,
     retry: context.retry,
+    tcpHost: context.tcpHost,
+    tcpPort: context.tcpPort,
   });
 }
 
@@ -165,5 +169,7 @@ export async function quitGroupSignal(groupId: string, opts: SignalDirectoryOpts
     baseUrl: context.baseUrl,
     timeoutMs: opts.timeoutMs,
     retry: context.retry,
+    tcpHost: context.tcpHost,
+    tcpPort: context.tcpPort,
   });
 }

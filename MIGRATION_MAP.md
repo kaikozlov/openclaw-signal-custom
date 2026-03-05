@@ -35,8 +35,8 @@ Make `openclaw-signal-custom` the source of truth for Signal behavior while stay
 
 | Workstream | Scope | Source PRs | Rewrite Level | Status |
 |---|---|---|---|---|
-| WS1 | Outbound + reactions + mentions + silent send | #27149, #27169, #27148, #27146, #27145 (outbound parts) | Low | In progress |
-| WS2 | RPC client + probe + transport | #27144, #27155; plus external #33851/#34177 | Medium | Planned |
+| WS1 | Outbound + reactions + mentions + silent send | #27149, #27169, #27148, #27146, #27145 (outbound parts) | Low | Done |
+| WS2 | RPC client + probe + transport | #27144, #27155; plus external #33851/#34177 | Medium | In progress |
 | WS3 | Directory + groups + group-management actions | #27147, #27171 | Medium | Done |
 | WS4 | Monitor/inbound pipeline parity (larger core coupling) | external #15956, #15994, #31232, #32026, #34546, #28417 | High | Backlog |
 | WS5 | Security/pairing/group allowlist hardening | external #26029, #26617, #26639, #29154/#25543 | Medium | Planned |
@@ -48,13 +48,13 @@ Make `openclaw-signal-custom` the source of truth for Signal behavior while stay
 | #27104 | declare `blockStreaming` capability | `src/channel.ts` | Very low | Done |
 | #27107 | groups dock adapter | `src/channel.ts` + helper module | Low | Done |
 | #27108 | mention strip patterns | `src/channel.ts` | Very low | Done |
-| #27144 | typed RPC errors + retry/backoff | `src/signal/client.ts` (plugin-local copy) | Medium | In progress (client foundation landed) |
-| #27145 | outbound edit/delete | `src/signal/send.ts` + actions wiring | Medium | In progress (plugin-local edit/delete actions landed) |
-| #27146 | outbound stickers + search | `src/signal/send.ts` + action wiring | Medium | In progress (plugin-local sticker actions landed) |
+| #27144 | typed RPC errors + retry/backoff | `src/signal/client.ts` (plugin-local copy) | Medium | Done |
+| #27145 | outbound edit/delete | `src/signal/send.ts` + actions wiring | Medium | Done |
+| #27146 | outbound stickers + search | `src/signal/send.ts` + action wiring | Medium | Done |
 | #27147 | directory/group lookup RPC + adapter | `src/signal/directory.ts`, `src/signal/groups.ts`, `src/channel.ts` | Medium | Done |
-| #27148 | outbound native mentions | `src/signal/send.ts` | Low | In progress (payload passthrough landed) |
-| #27149 | reaction hardening | `src/channel.ts` action prevalidation/normalization + future local send-reactions parity | Low | In progress |
-| #27155 | persistent TCP socket transport | `src/signal/socket-client.ts`, `src/signal/client.ts` | Medium/High | Planned |
+| #27148 | outbound native mentions | `src/signal/send.ts` | Low | Done |
+| #27149 | reaction hardening | `src/channel.ts` action prevalidation/normalization + local send-reactions parity | Low | Done |
+| #27155 | persistent TCP socket transport | `src/signal/socket-client.ts`, `src/signal/client.ts` | Medium/High | Done |
 | #27169 | silent sends (`noUrgent`) | `src/channel.ts` outbound passthrough + future local send module | Very low | Done (adapter passthrough) |
 | #27171 | group management/member info actions | action + groups/directory modules | Medium | Done |
 
@@ -117,7 +117,7 @@ Adapter rewrite only when:
 
 ## Tracking Checklist
 
-- [ ] WS1 outbound/actions slice merged
+- [x] WS1 outbound/actions slice merged
 - [ ] WS2 RPC/probe slice merged
 - [x] WS3 directory/groups slice merged
 - [ ] WS5 security hardening slice merged
