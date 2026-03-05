@@ -21,6 +21,8 @@ This is the execution checklist. We keep it updated as we land each slice.
 - [x] Port `#27148` outbound native mentions
 - [x] Port `#27146` stickers + sticker search
 - [x] Port outbound subset of `#27145` edit/delete support
+- [x] Move default outbound send path off runtime `sendMessageSignal`
+- [x] Add coverage for default TCP outbound path and local markdown/media send behavior
 
 ## Phase 3: WS2 RPC + Transport
 

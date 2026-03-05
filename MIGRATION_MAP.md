@@ -54,8 +54,8 @@ Make `openclaw-signal-custom` the source of truth for Signal behavior while stay
 | #27147 | directory/group lookup RPC + adapter | `src/signal/directory.ts`, `src/signal/groups.ts`, `src/channel.ts` | Medium | Done |
 | #27148 | outbound native mentions | `src/signal/send.ts` | Low | Done |
 | #27149 | reaction hardening | `src/channel.ts` action prevalidation/normalization + local send-reactions parity | Low | Done |
-| #27155 | persistent TCP socket transport | `src/signal/socket-client.ts`, `src/signal/client.ts` | Medium/High | Done |
-| #27169 | silent sends (`noUrgent`) | `src/channel.ts` outbound passthrough + future local send module | Very low | Done (adapter passthrough) |
+| #27155 | persistent TCP socket transport | `src/signal/socket-client.ts`, `src/signal/client.ts`, `src/signal/send.ts`, `src/channel.ts` | Medium/High | Done |
+| #27169 | silent sends (`noUrgent`) | `src/channel.ts`, `src/signal/send.ts` | Very low | Done |
 | #27171 | group management/member info actions | action + groups/directory modules | Medium | Done |
 
 ## External Signal PR Watchlist (Import Candidates)
@@ -125,5 +125,12 @@ Adapter rewrite only when:
 
 ## Notes
 
+- Outbound routing now uses the plugin-local sender by default for `sendText`, `sendMedia`, `sendPayload`, and pairing approval notifications.
+- TCP transport is now exercised on the default outbound path, not only on helper RPC modules.
+- Remaining runtime seams are intentional and currently limited to:
+  - fallback `messageActions` support for unported/future actions
+  - group policy / require-mention resolution
+  - inbound monitor and provider probe hooks
+  - text table-mode resolution and attachment staging helpers used by the local sender
 - Target outcome is not “zero fork forever”; it is “small, stable plugin-owned fork with predictable upstream sync.”
 - Prefer small incremental merges over one large parity dump.

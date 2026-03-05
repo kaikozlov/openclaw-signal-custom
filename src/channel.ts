@@ -3,6 +3,7 @@ import {
   buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,
   buildChannelConfigSchema,
+  chunkTextForOutbound,
   collectStatusIssuesFromLastError,
   createActionGate,
   createDefaultChannelRuntimeState,
@@ -38,11 +39,21 @@ import {
 } from "openclaw/plugin-sdk";
 import { getSignalRuntime } from "./runtime.js";
 import {
+  markdownToSignalTextChunks,
+  type SignalTextStyleRange,
+} from "./signal/format.js";
+import {
   deleteMessageSignal,
   editMessageSignal,
   listStickerPacksSignal,
   sendStickerSignal,
 } from "./signal/send-actions.js";
+import {
+  sendMessageSignal,
+  type SignalMentionRange,
+  type SignalSendOpts,
+  type SignalSendResult,
+} from "./signal/send.js";
 import { removeReactionSignal, sendReactionSignal } from "./signal/send-reactions.js";
 import { listSignalContacts, listSignalGroups } from "./signal/directory.js";
 import {
@@ -352,16 +363,7 @@ type SenderScopedToolsEntry = {
   toolsBySender?: GroupToolPolicyBySenderConfig;
 };
 
-type SignalMentionRange = {
-  start: number;
-  length: number;
-  recipient: string;
-};
-
-type SignalSendOptsCompat = Parameters<SignalSendFn>[2] & {
-  silent?: boolean;
-  mentions?: SignalMentionRange[];
-};
+type SignalSendOptsCompat = SignalSendOpts;
 
 type SignalPayloadChannelData = {
   mentions?: unknown;
@@ -704,7 +706,11 @@ function buildSignalSetupPatch(input: {
   };
 }
 
-type SignalSendFn = ReturnType<typeof getSignalRuntime>["channel"]["signal"]["sendMessageSignal"];
+type SignalSendFn = (
+  to: string,
+  text: string,
+  opts: SignalSendOptsCompat,
+) => Promise<SignalSendResult>;
 
 async function sendSignalOutbound(params: {
   cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
@@ -715,9 +721,11 @@ async function sendSignalOutbound(params: {
   accountId?: string;
   silent?: boolean;
   mentions?: SignalMentionRange[];
+  textMode?: SignalSendOpts["textMode"];
+  textStyles?: SignalTextStyleRange[];
   deps?: { sendSignal?: SignalSendFn };
 }) {
-  const send = params.deps?.sendSignal ?? getSignalRuntime().channel.signal.sendMessageSignal;
+  const send = params.deps?.sendSignal ?? sendMessageSignal;
   const maxBytes = resolveChannelMediaMaxBytes({
     cfg: params.cfg,
     resolveChannelLimitMb: ({ cfg, accountId }) =>
@@ -725,17 +733,18 @@ async function sendSignalOutbound(params: {
     accountId: params.accountId,
   });
   const sendOpts: SignalSendOptsCompat = {
+    cfg: params.cfg,
     ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
     ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
     maxBytes,
     accountId: params.accountId ?? undefined,
+    ...(params.textMode ? { textMode: params.textMode } : {}),
+    ...(params.textStyles?.length ? { textStyles: params.textStyles } : {}),
   };
   if (params.silent) {
-    // Forward-compatible pass-through: newer runtimes may support silent/noUrgent.
     sendOpts.silent = true;
   }
   if (params.mentions?.length) {
-    // Forward-compatible pass-through: newer runtimes may support native mention ranges.
     sendOpts.mentions = params.mentions;
   }
   return await send(params.to, params.text, sendOpts);
@@ -790,16 +799,36 @@ async function sendSignalPayloadOutbound(params: {
   }
 
   const chunkLimit = 4000;
-  const chunks = mentions?.length ? [text] : getSignalRuntime().channel.text.chunkText(text, chunkLimit);
+  if (mentions?.length) {
+    // Mention offsets are authored against the final payload text, so keep the
+    // message intact instead of re-chunking and invalidating native ranges.
+    const result = await sendSignalOutbound({
+      cfg: params.cfg,
+      to: params.to,
+      text,
+      accountId: params.accountId,
+      silent: params.silent,
+      mentions,
+      deps: params.deps,
+    });
+    return { channel: "signal" as const, ...result };
+  }
+  const tableMode = getSignalRuntime().channel.text.resolveMarkdownTableMode({
+    cfg: params.cfg,
+    channel: "signal",
+    accountId: params.accountId ?? undefined,
+  });
+  const chunks = markdownToSignalTextChunks(text, chunkLimit, { tableMode });
   let lastResult = { messageId: "" };
   for (const chunk of chunks) {
     lastResult = await sendSignalOutbound({
       cfg: params.cfg,
       to: params.to,
-      text: chunk,
+      text: chunk.text,
+      textMode: "plain",
+      textStyles: chunk.styles,
       accountId: params.accountId,
       silent: params.silent,
-      mentions,
       deps: params.deps,
     });
   }
@@ -815,8 +844,8 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   pairing: {
     idLabel: "signalNumber",
     normalizeAllowEntry: (entry) => entry.replace(/^signal:/i, ""),
-    notifyApproval: async ({ id }) => {
-      await getSignalRuntime().channel.signal.sendMessageSignal(id, PAIRING_APPROVED_MESSAGE);
+    notifyApproval: async ({ cfg, id }) => {
+      await sendMessageSignal(id, PAIRING_APPROVED_MESSAGE, { cfg });
     },
   },
   capabilities: {
@@ -1080,7 +1109,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   },
   outbound: {
     deliveryMode: "direct",
-    chunker: (text, limit) => getSignalRuntime().channel.text.chunkText(text, limit),
+    chunker: (text, limit) => chunkTextForOutbound(text, limit),
     chunkerMode: "text",
     textChunkLimit: 4000,
     sendPayload: async ({ cfg, to, payload, mediaLocalRoots, accountId, deps, silent }) => {
