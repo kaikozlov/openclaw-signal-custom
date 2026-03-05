@@ -86,7 +86,7 @@ describe("signalPlugin outbound sendMedia", () => {
     expect(toolPolicy).toEqual({ deny: ["exec"] });
   });
 
-  it("requires targetAuthor for react actions before runtime handler call", async () => {
+  it("requires targetAuthor for react actions before local handler call", async () => {
     const handleAction = vi.fn(async (_ctx: unknown) => ({ content: [] }));
     setSignalRuntime({
       channel: {
@@ -107,19 +107,9 @@ describe("signalPlugin outbound sendMedia", () => {
       } as never),
     ).rejects.toThrow(/targetAuthor|targetAuthorUuid/);
     expect(handleAction).not.toHaveBeenCalled();
-
-    await expect(
-      signalPlugin.actions?.handleAction?.({
-        channel: "signal",
-        action: "react",
-        cfg: {} as never,
-        params: { targetAuthor: "+15550001111", emoji: "✅" },
-      } as never),
-    ).resolves.toEqual({ content: [] });
-    expect(handleAction).toHaveBeenCalledTimes(1);
   });
 
-  it("normalizes reaction targetAuthor/messageId/emoji before runtime handler", async () => {
+  it("normalizes reaction targetAuthor/messageId/emoji and handles locally", async () => {
     const handleAction = vi.fn(async (_ctx: unknown) => ({ content: [] }));
     setSignalRuntime({
       channel: {
@@ -131,32 +121,65 @@ describe("signalPlugin outbound sendMedia", () => {
       },
     } as never);
 
-    await expect(
-      signalPlugin.actions?.handleAction?.({
+    const originalFetch = global.fetch;
+    const fetchMock = vi.fn<typeof fetch>();
+    fetchMock.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      statusText: "OK",
+      text: async () =>
+        JSON.stringify({
+          jsonrpc: "2.0",
+          result: { timestamp: 1700000000100, results: [{ type: "SUCCESS" }] },
+        }),
+    } as Response);
+    global.fetch = fetchMock;
+    try {
+      const result = await signalPlugin.actions?.handleAction?.({
         channel: "signal",
         action: "react",
-        cfg: {} as never,
+        cfg: {
+          channels: {
+            signal: {
+              account: "+15550001111",
+              httpUrl: "http://signal.local",
+            },
+          },
+        } as never,
         params: {
+          to: "signal:+15550001111",
           targetAuthor: "signal:uuid:123e4567-e89b-12d3-a456-426614174000",
           messageId: "00123",
           emoji: " ✅ ",
         },
-      } as never),
-    ).resolves.toEqual({ content: [] });
+      } as never);
 
-    expect(handleAction).toHaveBeenCalledTimes(1);
-    const firstCall = handleAction.mock.calls.at(0);
-    if (!firstCall) {
-      throw new Error("signal runtime action handler not called");
+      expect(result).toEqual(
+        expect.objectContaining({
+          details: expect.objectContaining({
+            ok: true,
+            added: "✅",
+            timestamp: 1700000000100,
+          }),
+        }),
+      );
+      expect(handleAction).not.toHaveBeenCalled();
+      const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+        method: string;
+        params: Record<string, unknown>;
+      };
+      expect(body.method).toBe("sendReaction");
+      expect(body.params).toEqual(
+        expect.objectContaining({
+          recipients: ["+15550001111"],
+          targetTimestamp: 123,
+          targetAuthor: "123e4567-e89b-12d3-a456-426614174000",
+          emoji: "✅",
+        }),
+      );
+    } finally {
+      global.fetch = originalFetch;
     }
-    const forwarded = firstCall[0] as { params: Record<string, unknown> };
-    expect(forwarded.params).toEqual(
-      expect.objectContaining({
-        targetAuthor: "123e4567-e89b-12d3-a456-426614174000",
-        messageId: "123",
-        emoji: "✅",
-      }),
-    );
   });
 
   it("rejects invalid reaction messageId before runtime handler call", async () => {
@@ -177,6 +200,7 @@ describe("signalPlugin outbound sendMedia", () => {
         action: "react",
         cfg: {} as never,
         params: {
+          to: "signal:+15550001111",
           targetAuthor: "+15550001111",
           emoji: "✅",
           messageId: "not-a-number",
@@ -204,6 +228,7 @@ describe("signalPlugin outbound sendMedia", () => {
         action: "react",
         cfg: {} as never,
         params: {
+          to: "signal:+15550001111",
           targetAuthor: "+15550001111",
         },
       } as never),

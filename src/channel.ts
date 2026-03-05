@@ -43,6 +43,7 @@ import {
   listStickerPacksSignal,
   sendStickerSignal,
 } from "./signal/send-actions.js";
+import { removeReactionSignal, sendReactionSignal } from "./signal/send-reactions.js";
 import { listSignalContacts, listSignalGroups } from "./signal/directory.js";
 import {
   addGroupMemberSignal,
@@ -68,6 +69,12 @@ const signalMessageActions: ChannelMessageActionAdapter = {
     }
     if (actions.size === 0) {
       actions.add("send");
+    }
+    const reactionsEnabled = configuredAccounts.some((account) =>
+      createSignalActionGate(account.config.actions)("reactions"),
+    );
+    if (reactionsEnabled) {
+      actions.add("react");
     }
     const editEnabled = configuredAccounts.some((account) =>
       createSignalActionGate(account.config.actions)("editMessage"),
@@ -99,6 +106,7 @@ const signalMessageActions: ChannelMessageActionAdapter = {
     return Array.from(actions);
   },
   supportsAction: ({ action }) =>
+    action === "react" ||
     action === "edit" ||
     action === "delete" ||
     action === "unsend" ||
@@ -285,10 +293,49 @@ const signalMessageActions: ChannelMessageActionAdapter = {
       return jsonResult({ ok: true, groupId, members });
     }
     if (ctx.action === "react") {
+      const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
+      if (!createSignalActionGate(actionConfig)("reactions")) {
+        throw new Error("Signal reactions are disabled via actions.reactions.");
+      }
       validateAndNormalizeReactionParams({
         args: ctx.params,
         toolContext: ctx.toolContext,
       });
+      const recipientRaw = readSignalRecipientParam(ctx.params);
+      const target = resolveSignalReactionTarget(recipientRaw);
+      if (!target.recipient && !target.groupId) {
+        throw new Error("recipient or group required");
+      }
+      const messageId = resolveReactionMessageId({
+        args: ctx.params,
+        toolContext: ctx.toolContext,
+      });
+      const timestamp = parseSignalMessageTimestamp(String(messageId ?? ""));
+      const emoji = readStringParam(ctx.params, "emoji", {
+        required: true,
+        allowEmpty: false,
+      });
+      const remove = typeof ctx.params.remove === "boolean" ? ctx.params.remove : false;
+      const targetAuthor = readStringParam(ctx.params, "targetAuthor");
+      const targetAuthorUuid = readStringParam(ctx.params, "targetAuthorUuid");
+      if (remove) {
+        const result = await removeReactionSignal(target.recipient ?? "", timestamp, emoji, {
+          cfg: ctx.cfg,
+          accountId: ctx.accountId ?? undefined,
+          groupId: target.groupId,
+          targetAuthor: targetAuthor ?? undefined,
+          targetAuthorUuid: targetAuthorUuid ?? undefined,
+        });
+        return jsonResult({ ok: true, removed: emoji, timestamp: result.timestamp });
+      }
+      const result = await sendReactionSignal(target.recipient ?? "", timestamp, emoji, {
+        cfg: ctx.cfg,
+        accountId: ctx.accountId ?? undefined,
+        groupId: target.groupId,
+        targetAuthor: targetAuthor ?? undefined,
+        targetAuthorUuid: targetAuthorUuid ?? undefined,
+      });
+      return jsonResult({ ok: true, added: emoji, timestamp: result.timestamp });
     }
     const ma = getSignalRuntime().channel.signal.messageActions;
     if (!ma?.handleAction) {
@@ -414,6 +461,23 @@ function normalizeSignalReactionAuthor(raw: string): string {
     return withoutSignal.slice("uuid:".length).trim();
   }
   return withoutSignal;
+}
+
+function resolveSignalReactionTarget(raw: string): { recipient?: string; groupId?: string } {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return {};
+  }
+  const withoutSignal = trimmed.replace(/^signal:/i, "").trim();
+  if (!withoutSignal) {
+    return {};
+  }
+  if (withoutSignal.toLowerCase().startsWith("group:")) {
+    const groupId = withoutSignal.slice("group:".length).trim();
+    return groupId ? { groupId } : {};
+  }
+  const recipient = normalizeSignalReactionAuthor(withoutSignal);
+  return recipient ? { recipient } : {};
 }
 
 function resolveReactionMessageId(params: {
