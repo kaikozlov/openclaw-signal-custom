@@ -32,5 +32,7 @@ fi
 
 git -C "$REPO_ROOT" switch main >/dev/null
 
+"$SCRIPT_DIR/sync-status.sh"
+
 echo "Upstream snapshot updated on branch upstream-signal."
 echo "Next: git merge upstream-signal"

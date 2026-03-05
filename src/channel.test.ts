@@ -2,6 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { signalPlugin } from "./channel.js";
 
 describe("signalPlugin outbound sendMedia", () => {
+  it("declares blockStreaming and mention strip patterns", () => {
+    expect(signalPlugin.capabilities?.blockStreaming).toBe(true);
+    expect(signalPlugin.mentions?.stripPatterns?.({} as never)).toEqual(["\uFFFC"]);
+  });
+
   it("forwards mediaLocalRoots to sendMessageSignal", async () => {
     const sendSignal = vi.fn(async () => ({ messageId: "m1" }));
     const mediaLocalRoots = ["/tmp/workspace"];
