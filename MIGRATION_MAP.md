@@ -37,7 +37,7 @@ Make `openclaw-signal-custom` the source of truth for Signal behavior while stay
 |---|---|---|---|---|
 | WS1 | Outbound + reactions + mentions + silent send | #27149, #27169, #27148, #27146, #27145 (outbound parts) | Low | In progress |
 | WS2 | RPC client + probe + transport | #27144, #27155; plus external #33851/#34177 | Medium | Planned |
-| WS3 | Directory + groups + group-management actions | #27147, #27171 | Medium | In progress |
+| WS3 | Directory + groups + group-management actions | #27147, #27171 | Medium | Done |
 | WS4 | Monitor/inbound pipeline parity (larger core coupling) | external #15956, #15994, #31232, #32026, #34546, #28417 | High | Backlog |
 | WS5 | Security/pairing/group allowlist hardening | external #26029, #26617, #26639, #29154/#25543 | Medium | Planned |
 
@@ -56,7 +56,7 @@ Make `openclaw-signal-custom` the source of truth for Signal behavior while stay
 | #27149 | reaction hardening | `src/channel.ts` action prevalidation/normalization + future local send-reactions parity | Low | In progress |
 | #27155 | persistent TCP socket transport | `src/signal/socket-client.ts`, `src/signal/client.ts` | Medium/High | Planned |
 | #27169 | silent sends (`noUrgent`) | `src/channel.ts` outbound passthrough + future local send module | Very low | Done (adapter passthrough) |
-| #27171 | group management/member info actions | action + groups/directory modules | Medium | Planned |
+| #27171 | group management/member info actions | action + groups/directory modules | Medium | Done |
 
 ## External Signal PR Watchlist (Import Candidates)
 

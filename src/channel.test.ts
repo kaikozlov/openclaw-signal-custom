@@ -263,6 +263,57 @@ describe("signalPlugin outbound sendMedia", () => {
     expect(actions).toContain("sticker-search");
   });
 
+  it("lists group-management actions when actions.groupManagement is enabled", () => {
+    setSignalRuntime({
+      channel: {
+        signal: {
+          messageActions: {
+            listActions: () => ["send"],
+          },
+        },
+      },
+    } as never);
+
+    const cfg = {
+      channels: {
+        signal: {
+          account: "+15550001111",
+          httpUrl: "http://signal.local",
+        },
+      },
+    } as never;
+    const actions = signalPlugin.actions?.listActions?.({ cfg }) ?? [];
+    expect(actions).toContain("renameGroup");
+    expect(actions).toContain("addParticipant");
+    expect(actions).toContain("removeParticipant");
+    expect(actions).toContain("leaveGroup");
+    expect(actions).toContain("member-info");
+  });
+
+  it("blocks group-management actions when actions.groupManagement is disabled", async () => {
+    await expect(
+      signalPlugin.actions?.handleAction?.({
+        channel: "signal",
+        action: "renameGroup",
+        cfg: {
+          channels: {
+            signal: {
+              account: "+15550001111",
+              httpUrl: "http://signal.local",
+              actions: {
+                groupManagement: false,
+              },
+            },
+          },
+        } as never,
+        params: {
+          groupId: "group-1",
+          name: "New Name",
+        },
+      } as never),
+    ).rejects.toThrow(/actions\.groupManagement/);
+  });
+
   it("handles edit action locally without runtime messageActions.handleAction", async () => {
     const handleAction = vi.fn(async (_ctx: unknown) => ({ content: [] }));
     setSignalRuntime({
@@ -315,6 +366,76 @@ describe("signalPlugin outbound sendMedia", () => {
             ok: true,
             edited: true,
             messageId: "1700000000000",
+          }),
+        }),
+      );
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it("handles renameGroup locally without runtime messageActions.handleAction", async () => {
+    const handleAction = vi.fn(async (_ctx: unknown) => ({ content: [] }));
+    setSignalRuntime({
+      channel: {
+        signal: {
+          messageActions: {
+            handleAction,
+          },
+        },
+      },
+    } as never);
+
+    const originalFetch = global.fetch;
+    const fetchMock = vi.fn<typeof fetch>();
+    fetchMock.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      statusText: "OK",
+      text: async () =>
+        JSON.stringify({
+          jsonrpc: "2.0",
+          result: null,
+        }),
+    } as Response);
+    global.fetch = fetchMock;
+    try {
+      const result = await signalPlugin.actions?.handleAction?.({
+        channel: "signal",
+        action: "renameGroup",
+        cfg: {
+          channels: {
+            signal: {
+              account: "+15550001111",
+              httpUrl: "http://signal.local",
+            },
+          },
+        } as never,
+        params: {
+          groupId: "signal:group:group-1",
+          name: "  New Group Name  ",
+        },
+      } as never);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(handleAction).not.toHaveBeenCalled();
+      const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+        method: string;
+        params: Record<string, unknown>;
+      };
+      expect(body.method).toBe("updateGroup");
+      expect(body.params).toEqual(
+        expect.objectContaining({
+          groupId: "group-1",
+          name: "New Group Name",
+        }),
+      );
+      expect(result).toEqual(
+        expect.objectContaining({
+          details: expect.objectContaining({
+            ok: true,
+            renamed: "group-1",
+            name: "New Group Name",
           }),
         }),
       );

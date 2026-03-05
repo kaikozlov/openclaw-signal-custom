@@ -44,7 +44,13 @@ import {
   sendStickerSignal,
 } from "./signal/send-actions.js";
 import { listSignalContacts, listSignalGroups } from "./signal/directory.js";
-import { listGroupMembersSignal } from "./signal/groups.js";
+import {
+  addGroupMemberSignal,
+  listGroupMembersSignal,
+  quitGroupSignal,
+  removeGroupMemberSignal,
+  updateGroupSignal,
+} from "./signal/groups.js";
 
 type ReactionToolContext = {
   currentMessageId?: string | number;
@@ -82,6 +88,14 @@ const signalMessageActions: ChannelMessageActionAdapter = {
       actions.add("sticker");
       actions.add("sticker-search");
     }
+    const groupManagementEnabled = configuredAccounts.some((account) =>
+      createSignalActionGate(account.config.actions)("groupManagement"),
+    );
+    if (groupManagementEnabled) {
+      for (const action of SIGNAL_GROUP_MANAGEMENT_ACTIONS) {
+        actions.add(action);
+      }
+    }
     return Array.from(actions);
   },
   supportsAction: ({ action }) =>
@@ -90,6 +104,9 @@ const signalMessageActions: ChannelMessageActionAdapter = {
     action === "unsend" ||
     action === "sticker" ||
     action === "sticker-search" ||
+    SIGNAL_GROUP_MANAGEMENT_ACTIONS.includes(
+      action as (typeof SIGNAL_GROUP_MANAGEMENT_ACTIONS)[number],
+    ) ||
     (getSignalRuntime().channel.signal.messageActions?.supportsAction?.({ action }) ?? false),
   handleAction: async (ctx) => {
     if (ctx.action === "edit") {
@@ -186,6 +203,87 @@ const signalMessageActions: ChannelMessageActionAdapter = {
         typeof limit === "number" && limit > 0 ? filtered.slice(0, Math.trunc(limit)) : filtered;
       return jsonResult({ ok: true, packs: capped });
     }
+    if (ctx.action === "renameGroup") {
+      const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
+      if (!createSignalActionGate(actionConfig)("groupManagement")) {
+        throw new Error("Signal group management is disabled via actions.groupManagement.");
+      }
+      const groupId = readSignalGroupIdParam(ctx.params);
+      const name = readStringParam(ctx.params, "name") ?? readStringParam(ctx.params, "displayName");
+      if (!name?.trim()) {
+        throw new Error("Signal renameGroup requires name parameter.");
+      }
+      await updateGroupSignal(
+        groupId,
+        { name: name.trim() },
+        { cfg: ctx.cfg, accountId: ctx.accountId ?? undefined },
+      );
+      return jsonResult({ ok: true, renamed: groupId, name: name.trim() });
+    }
+    if (ctx.action === "addParticipant") {
+      const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
+      if (!createSignalActionGate(actionConfig)("groupManagement")) {
+        throw new Error("Signal group management is disabled via actions.groupManagement.");
+      }
+      const groupId = readSignalGroupIdParam(ctx.params);
+      const member =
+        readStringParam(ctx.params, "participant") ??
+        readStringParam(ctx.params, "member") ??
+        readStringParam(ctx.params, "address");
+      if (!member?.trim()) {
+        throw new Error("Signal addParticipant requires participant parameter (phone number or UUID).");
+      }
+      await addGroupMemberSignal(groupId, member.trim(), {
+        cfg: ctx.cfg,
+        accountId: ctx.accountId ?? undefined,
+      });
+      return jsonResult({ ok: true, added: member.trim(), groupId });
+    }
+    if (ctx.action === "removeParticipant") {
+      const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
+      if (!createSignalActionGate(actionConfig)("groupManagement")) {
+        throw new Error("Signal group management is disabled via actions.groupManagement.");
+      }
+      const groupId = readSignalGroupIdParam(ctx.params);
+      const member =
+        readStringParam(ctx.params, "participant") ??
+        readStringParam(ctx.params, "member") ??
+        readStringParam(ctx.params, "address");
+      if (!member?.trim()) {
+        throw new Error(
+          "Signal removeParticipant requires participant parameter (phone number or UUID).",
+        );
+      }
+      await removeGroupMemberSignal(groupId, member.trim(), {
+        cfg: ctx.cfg,
+        accountId: ctx.accountId ?? undefined,
+      });
+      return jsonResult({ ok: true, removed: member.trim(), groupId });
+    }
+    if (ctx.action === "leaveGroup") {
+      const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
+      if (!createSignalActionGate(actionConfig)("groupManagement")) {
+        throw new Error("Signal group management is disabled via actions.groupManagement.");
+      }
+      const groupId = readSignalGroupIdParam(ctx.params);
+      await quitGroupSignal(groupId, {
+        cfg: ctx.cfg,
+        accountId: ctx.accountId ?? undefined,
+      });
+      return jsonResult({ ok: true, left: groupId });
+    }
+    if (ctx.action === "member-info") {
+      const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
+      if (!createSignalActionGate(actionConfig)("groupManagement")) {
+        throw new Error("Signal group management is disabled via actions.groupManagement.");
+      }
+      const groupId = readSignalGroupIdParam(ctx.params);
+      const members = await listGroupMembersSignal(groupId, {
+        cfg: ctx.cfg,
+        accountId: ctx.accountId ?? undefined,
+      });
+      return jsonResult({ ok: true, groupId, members });
+    }
     if (ctx.action === "react") {
       validateAndNormalizeReactionParams({
         args: ctx.params,
@@ -227,7 +325,16 @@ type SignalActionConfig = {
   editMessage?: boolean;
   deleteMessage?: boolean;
   stickers?: boolean;
+  groupManagement?: boolean;
 };
+
+const SIGNAL_GROUP_MANAGEMENT_ACTIONS = [
+  "renameGroup",
+  "addParticipant",
+  "removeParticipant",
+  "leaveGroup",
+  "member-info",
+] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -364,6 +471,20 @@ function readSignalRecipientParam(params: Record<string, unknown>): string {
       label: "recipient (phone number, UUID, or group)",
     })
   );
+}
+
+function readSignalGroupIdParam(params: Record<string, unknown>): string {
+  const raw =
+    readStringParam(params, "groupId") ??
+    readStringParam(params, "to", {
+      required: true,
+      label: "groupId (Signal group ID)",
+    });
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    throw new Error("Signal group management requires groupId.");
+  }
+  return trimmed.replace(/^signal:group:/i, "").replace(/^group:/i, "").trim();
 }
 
 function parseSignalMessageTimestamp(raw: string): number {
