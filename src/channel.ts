@@ -29,6 +29,7 @@ import {
   type ChannelPlugin,
   type GroupToolPolicyBySenderConfig,
   type GroupToolPolicyConfig,
+  type ReplyPayload,
   type ResolvedSignalAccount,
 } from "openclaw/plugin-sdk";
 import { getSignalRuntime } from "./runtime.js";
@@ -61,6 +62,82 @@ type SenderScopedToolsEntry = {
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
 };
+
+type SignalMentionRange = {
+  start: number;
+  length: number;
+  recipient: string;
+};
+
+type SignalSendOptsCompat = Parameters<SignalSendFn>[2] & {
+  silent?: boolean;
+  mentions?: SignalMentionRange[];
+};
+
+type SignalPayloadChannelData = {
+  mentions?: unknown;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function normalizeSignalMentionRecipient(raw: string, index: number): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    throw new Error(`Signal mention ${index} recipient is required`);
+  }
+  const withoutSignal = trimmed.replace(/^signal:/i, "").trim();
+  if (!withoutSignal) {
+    throw new Error(`Signal mention ${index} recipient is required`);
+  }
+  if (withoutSignal.toLowerCase().startsWith("uuid:")) {
+    const uuid = withoutSignal.slice("uuid:".length).trim();
+    if (!uuid) {
+      throw new Error(`Signal mention ${index} recipient is required`);
+    }
+    return uuid;
+  }
+  return withoutSignal;
+}
+
+function parseSignalMentionRanges(rawMentions: unknown): SignalMentionRange[] | undefined {
+  if (!Array.isArray(rawMentions) || rawMentions.length === 0) {
+    return undefined;
+  }
+  return rawMentions.map((rawMention, index) => {
+    if (!isRecord(rawMention)) {
+      throw new Error(`Signal mention ${index} must be an object`);
+    }
+    const start = Number(rawMention.start);
+    if (!Number.isFinite(start) || start < 0) {
+      throw new Error(`Signal mention ${index} has an invalid start`);
+    }
+    const length = Number(rawMention.length);
+    if (!Number.isFinite(length) || length <= 0) {
+      throw new Error(`Signal mention ${index} has an invalid length`);
+    }
+    const recipientRaw = typeof rawMention.recipient === "string" ? rawMention.recipient : "";
+    const recipient = normalizeSignalMentionRecipient(recipientRaw, index);
+    return {
+      start: Math.trunc(start),
+      length: Math.trunc(length),
+      recipient,
+    };
+  });
+}
+
+function resolveSignalPayloadMentions(payload: ReplyPayload): SignalMentionRange[] | undefined {
+  if (!isRecord(payload.channelData)) {
+    return undefined;
+  }
+  const signalData = payload.channelData.signal;
+  if (!isRecord(signalData)) {
+    return undefined;
+  }
+  const typedSignalData = signalData as SignalPayloadChannelData;
+  return parseSignalMentionRanges(typedSignalData.mentions);
+}
 
 function resolveSenderScopedToolPolicy(
   entry: SenderScopedToolsEntry | undefined,
@@ -131,6 +208,7 @@ async function sendSignalOutbound(params: {
   mediaLocalRoots?: readonly string[];
   accountId?: string;
   silent?: boolean;
+  mentions?: SignalMentionRange[];
   deps?: { sendSignal?: SignalSendFn };
 }) {
   const send = params.deps?.sendSignal ?? getSignalRuntime().channel.signal.sendMessageSignal;
@@ -140,17 +218,86 @@ async function sendSignalOutbound(params: {
       cfg.channels?.signal?.accounts?.[accountId]?.mediaMaxMb ?? cfg.channels?.signal?.mediaMaxMb,
     accountId: params.accountId,
   });
-  const sendOpts = {
+  const sendOpts: SignalSendOptsCompat = {
     ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
     ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
     maxBytes,
     accountId: params.accountId ?? undefined,
-  } as Parameters<SignalSendFn>[2];
+  };
   if (params.silent) {
     // Forward-compatible pass-through: newer runtimes may support silent/noUrgent.
-    (sendOpts as { silent?: boolean }).silent = true;
+    sendOpts.silent = true;
+  }
+  if (params.mentions?.length) {
+    // Forward-compatible pass-through: newer runtimes may support native mention ranges.
+    sendOpts.mentions = params.mentions;
   }
   return await send(params.to, params.text, sendOpts);
+}
+
+async function sendSignalPayloadOutbound(params: {
+  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
+  to: string;
+  payload: ReplyPayload;
+  mediaLocalRoots?: readonly string[];
+  accountId?: string;
+  silent?: boolean;
+  deps?: { sendSignal?: SignalSendFn };
+}) {
+  const text = params.payload.text ?? "";
+  const mediaUrls = params.payload.mediaUrls?.length
+    ? params.payload.mediaUrls
+    : params.payload.mediaUrl
+      ? [params.payload.mediaUrl]
+      : [];
+  const mentions = resolveSignalPayloadMentions(params.payload);
+
+  if (!text && mediaUrls.length === 0) {
+    return { channel: "signal" as const, messageId: "" };
+  }
+
+  if (mediaUrls.length > 0) {
+    let lastResult = await sendSignalOutbound({
+      cfg: params.cfg,
+      to: params.to,
+      text,
+      mediaUrl: mediaUrls[0],
+      mediaLocalRoots: params.mediaLocalRoots,
+      accountId: params.accountId,
+      silent: params.silent,
+      mentions,
+      deps: params.deps,
+    });
+    for (let i = 1; i < mediaUrls.length; i += 1) {
+      lastResult = await sendSignalOutbound({
+        cfg: params.cfg,
+        to: params.to,
+        text: "",
+        mediaUrl: mediaUrls[i],
+        mediaLocalRoots: params.mediaLocalRoots,
+        accountId: params.accountId,
+        silent: params.silent,
+        deps: params.deps,
+      });
+    }
+    return { channel: "signal" as const, ...lastResult };
+  }
+
+  const chunkLimit = 4000;
+  const chunks = mentions?.length ? [text] : getSignalRuntime().channel.text.chunkText(text, chunkLimit);
+  let lastResult = { messageId: "" };
+  for (const chunk of chunks) {
+    lastResult = await sendSignalOutbound({
+      cfg: params.cfg,
+      to: params.to,
+      text: chunk,
+      accountId: params.accountId,
+      silent: params.silent,
+      mentions,
+      deps: params.deps,
+    });
+  }
+  return { channel: "signal" as const, ...lastResult };
 }
 
 export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
@@ -354,6 +501,17 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     chunker: (text, limit) => getSignalRuntime().channel.text.chunkText(text, limit),
     chunkerMode: "text",
     textChunkLimit: 4000,
+    sendPayload: async ({ cfg, to, payload, mediaLocalRoots, accountId, deps, silent }) => {
+      return await sendSignalPayloadOutbound({
+        cfg,
+        to,
+        payload,
+        mediaLocalRoots,
+        accountId: accountId ?? undefined,
+        deps,
+        silent: silent ?? undefined,
+      });
+    },
     sendText: async ({ cfg, to, text, accountId, deps, silent }) => {
       const result = await sendSignalOutbound({
         cfg,
