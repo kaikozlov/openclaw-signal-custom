@@ -30,7 +30,7 @@ This is the execution checklist. We keep it updated as we land each slice.
 
 ## Phase 4: WS3 Directory + Group Actions
 
-- [ ] Port `#27147` directory/group lookup modules
+- [x] Port `#27147` directory/group lookup modules
 - [ ] Port `#27171` group management + member info actions
 
 ## Phase 5: Security + Hardening

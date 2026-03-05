@@ -385,4 +385,101 @@ describe("signalPlugin outbound sendMedia", () => {
       global.fetch = originalFetch;
     }
   });
+
+  it("lists peers through plugin-local directory lookup", async () => {
+    const originalFetch = global.fetch;
+    const fetchMock = vi.fn<typeof fetch>();
+    fetchMock.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      statusText: "OK",
+      text: async () =>
+        JSON.stringify({
+          jsonrpc: "2.0",
+          result: [
+            { number: "+15550002222", name: "Alice" },
+            { number: "+15550003333", name: "Bob" },
+          ],
+        }),
+    } as Response);
+    global.fetch = fetchMock;
+    try {
+      const peers = await signalPlugin.directory?.listPeers?.({
+        cfg: {
+          channels: {
+            signal: {
+              account: "+15550001111",
+              httpUrl: "http://signal.local",
+            },
+          },
+        } as never,
+        query: "ali",
+        limit: 1,
+      } as never);
+
+      expect(peers).toEqual([
+        expect.objectContaining({
+          kind: "user",
+          id: "+15550002222",
+          name: "Alice",
+        }),
+      ]);
+      const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+        method: string;
+      };
+      expect(body.method).toBe("listContacts");
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it("lists group members through plugin-local detailed groups lookup", async () => {
+    const originalFetch = global.fetch;
+    const fetchMock = vi.fn<typeof fetch>();
+    fetchMock.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      statusText: "OK",
+      text: async () =>
+        JSON.stringify({
+          jsonrpc: "2.0",
+          result: [
+            {
+              id: "group-1",
+              members: [{ number: "+15550002222", name: "Alice" }],
+            },
+          ],
+        }),
+    } as Response);
+    global.fetch = fetchMock;
+    try {
+      const members = await signalPlugin.directory?.listGroupMembers?.({
+        cfg: {
+          channels: {
+            signal: {
+              account: "+15550001111",
+              httpUrl: "http://signal.local",
+            },
+          },
+        } as never,
+        groupId: "group:group-1",
+      } as never);
+
+      expect(members).toEqual([
+        expect.objectContaining({
+          kind: "user",
+          id: "+15550002222",
+          name: "Alice",
+        }),
+      ]);
+      const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+        method: string;
+        params: Record<string, unknown>;
+      };
+      expect(body.method).toBe("listGroups");
+      expect(body.params).toEqual(expect.objectContaining({ detailed: true }));
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
 });
