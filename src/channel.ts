@@ -24,8 +24,11 @@ import {
   setAccountEnabledInConfigSection,
   signalOnboardingAdapter,
   SignalConfigSchema,
+  type ChannelGroupContext,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
+  type GroupToolPolicyBySenderConfig,
+  type GroupToolPolicyConfig,
   type ResolvedSignalAccount,
 } from "openclaw/plugin-sdk";
 import { getSignalRuntime } from "./runtime.js";
@@ -35,6 +38,15 @@ const signalMessageActions: ChannelMessageActionAdapter = {
   supportsAction: (ctx) =>
     getSignalRuntime().channel.signal.messageActions?.supportsAction?.(ctx) ?? false,
   handleAction: async (ctx) => {
+    if (ctx.action === "react") {
+      const targetAuthor =
+        typeof ctx.params.targetAuthor === "string" ? ctx.params.targetAuthor.trim() : "";
+      const targetAuthorUuid =
+        typeof ctx.params.targetAuthorUuid === "string" ? ctx.params.targetAuthorUuid.trim() : "";
+      if (!targetAuthor && !targetAuthorUuid) {
+        throw new Error("targetAuthor or targetAuthorUuid required for Signal reactions.");
+      }
+    }
     const ma = getSignalRuntime().channel.signal.messageActions;
     if (!ma?.handleAction) {
       throw new Error("Signal message actions not available");
@@ -44,6 +56,54 @@ const signalMessageActions: ChannelMessageActionAdapter = {
 };
 
 const meta = getChatChannelMeta("signal");
+
+type SenderScopedToolsEntry = {
+  tools?: GroupToolPolicyConfig;
+  toolsBySender?: GroupToolPolicyBySenderConfig;
+};
+
+function resolveSenderScopedToolPolicy(
+  entry: SenderScopedToolsEntry | undefined,
+  params: ChannelGroupContext,
+): GroupToolPolicyConfig | undefined {
+  if (!entry) {
+    return undefined;
+  }
+  const bySender = entry.toolsBySender;
+  if (!bySender || Object.keys(bySender).length === 0) {
+    return entry.tools;
+  }
+  const candidates: string[] = [];
+  const push = (value?: string | null) => {
+    const trimmed = value?.trim();
+    if (trimmed) {
+      candidates.push(trimmed);
+    }
+  };
+  push(params.senderId);
+  push(params.senderE164);
+  push(params.senderUsername);
+  push(params.senderName);
+  if (params.senderId) {
+    candidates.push(`id:${params.senderId}`);
+  }
+  if (params.senderE164) {
+    candidates.push(`e164:${params.senderE164}`);
+  }
+  if (params.senderUsername) {
+    candidates.push(`username:${params.senderUsername}`);
+  }
+  if (params.senderName) {
+    candidates.push(`name:${params.senderName}`);
+  }
+  for (const key of candidates) {
+    const hit = bySender[key];
+    if (hit) {
+      return hit;
+    }
+  }
+  return bySender["*"] ?? entry.tools;
+}
 
 function buildSignalSetupPatch(input: {
   signalNumber?: string;
@@ -70,6 +130,7 @@ async function sendSignalOutbound(params: {
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
   accountId?: string;
+  silent?: boolean;
   deps?: { sendSignal?: SignalSendFn };
 }) {
   const send = params.deps?.sendSignal ?? getSignalRuntime().channel.signal.sendMessageSignal;
@@ -79,12 +140,17 @@ async function sendSignalOutbound(params: {
       cfg.channels?.signal?.accounts?.[accountId]?.mediaMaxMb ?? cfg.channels?.signal?.mediaMaxMb,
     accountId: params.accountId,
   });
-  return await send(params.to, params.text, {
+  const sendOpts = {
     ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
     ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
     maxBytes,
     accountId: params.accountId ?? undefined,
-  });
+  } as Parameters<SignalSendFn>[2];
+  if (params.silent) {
+    // Forward-compatible pass-through: newer runtimes may support silent/noUrgent.
+    (sendOpts as { silent?: boolean }).silent = true;
+  }
+  return await send(params.to, params.text, sendOpts);
 }
 
 export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
@@ -186,6 +252,28 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       ];
     },
   },
+  groups: {
+    resolveRequireMention: (params) =>
+      getSignalRuntime().channel.groups.resolveRequireMention({
+        cfg: params.cfg,
+        channel: "signal",
+        groupId: params.groupId,
+        accountId: params.accountId ?? undefined,
+      }),
+    resolveToolPolicy: (params) => {
+      const policy = getSignalRuntime().channel.groups.resolveGroupPolicy({
+        cfg: params.cfg,
+        channel: "signal",
+        groupId: params.groupId,
+        accountId: params.accountId ?? undefined,
+      });
+      const scopedPolicy = resolveSenderScopedToolPolicy(policy.groupConfig, params);
+      if (scopedPolicy) {
+        return scopedPolicy;
+      }
+      return resolveSenderScopedToolPolicy(policy.defaultConfig, params);
+    },
+  },
   messaging: {
     normalizeTarget: normalizeSignalMessagingTarget,
     targetResolver: {
@@ -266,17 +354,18 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     chunker: (text, limit) => getSignalRuntime().channel.text.chunkText(text, limit),
     chunkerMode: "text",
     textChunkLimit: 4000,
-    sendText: async ({ cfg, to, text, accountId, deps }) => {
+    sendText: async ({ cfg, to, text, accountId, deps, silent }) => {
       const result = await sendSignalOutbound({
         cfg,
         to,
         text,
         accountId: accountId ?? undefined,
+        silent: silent ?? undefined,
         deps,
       });
       return { channel: "signal", ...result };
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps }) => {
+    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps, silent }) => {
       const result = await sendSignalOutbound({
         cfg,
         to,
@@ -284,6 +373,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         mediaUrl,
         mediaLocalRoots,
         accountId: accountId ?? undefined,
+        silent: silent ?? undefined,
         deps,
       });
       return { channel: "signal", ...result };

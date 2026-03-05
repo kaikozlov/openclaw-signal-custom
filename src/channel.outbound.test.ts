@@ -58,4 +58,24 @@ describe("signal outbound cfg threading", () => {
     });
     expect(result).toEqual({ channel: "signal", messageId: "sig-2" });
   });
+
+  it("forwards silent flag in sendText when requested", async () => {
+    const cfg = { channels: { signal: {} } };
+    const sendSignal = vi.fn(async () => ({ messageId: "sig-3" }));
+
+    const result = await signalPlugin.outbound!.sendText!({
+      cfg,
+      to: "+15550001111",
+      text: "quiet ping",
+      silent: true,
+      deps: { sendSignal },
+    });
+
+    expect(sendSignal).toHaveBeenCalledWith("+15550001111", "quiet ping", {
+      maxBytes: undefined,
+      accountId: undefined,
+      silent: true,
+    });
+    expect(result).toEqual({ channel: "signal", messageId: "sig-3" });
+  });
 });

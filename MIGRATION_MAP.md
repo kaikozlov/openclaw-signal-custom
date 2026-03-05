@@ -46,16 +46,16 @@ Make `openclaw-signal-custom` the source of truth for Signal behavior while stay
 | PR | Title (short) | Primary target in plugin repo | Expected rewrite | Status |
 |---|---|---|---|---|
 | #27104 | declare `blockStreaming` capability | `src/channel.ts` | Very low | Done |
-| #27107 | groups dock adapter | `src/channel.ts` + helper module | Low | Planned |
+| #27107 | groups dock adapter | `src/channel.ts` + helper module | Low | Done |
 | #27108 | mention strip patterns | `src/channel.ts` | Very low | Done |
 | #27144 | typed RPC errors + retry/backoff | `src/signal/client.ts` (plugin-local copy) | Medium | Planned |
 | #27145 | outbound edit/delete | `src/signal/send.ts` + actions wiring | Medium | Planned |
 | #27146 | outbound stickers + search | `src/signal/send.ts` + action wiring | Medium | Planned |
 | #27147 | directory/group lookup RPC + adapter | `src/signal/directory.ts`, `src/signal/groups.ts`, `src/channel.ts` | Medium | Planned |
 | #27148 | outbound native mentions | `src/signal/send.ts` | Low | Planned |
-| #27149 | reaction hardening | `src/signal/send-reactions.ts` + tests | Low | Planned |
+| #27149 | reaction hardening | `src/channel.ts` action prevalidation (phase 1) + future local send-reactions parity | Low | In progress |
 | #27155 | persistent TCP socket transport | `src/signal/socket-client.ts`, `src/signal/client.ts` | Medium/High | Planned |
-| #27169 | silent sends (`noUrgent`) | `src/signal/send.ts` | Very low | Planned |
+| #27169 | silent sends (`noUrgent`) | `src/channel.ts` outbound passthrough + future local send module | Very low | Done (adapter passthrough) |
 | #27171 | group management/member info actions | action + groups/directory modules | Medium | Planned |
 
 ## External Signal PR Watchlist (Import Candidates)
