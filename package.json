@@ -1,8 +1,8 @@
 {
-  "name": "@openclaw/signal",
+  "name": "@openclaw/signal-custom",
   "version": "2026.3.2",
   "private": true,
-  "description": "OpenClaw Signal channel plugin",
+  "description": "OpenClaw Signal custom channel plugin (fork baseline)",
   "type": "module",
   "openclaw": {
     "extensions": [

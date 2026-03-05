@@ -1,5 +1,5 @@
 {
-  "id": "signal",
+  "id": "signal-custom",
   "channels": ["signal"],
   "configSchema": {
     "type": "object",

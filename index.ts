@@ -4,9 +4,9 @@ import { signalPlugin } from "./src/channel.js";
 import { setSignalRuntime } from "./src/runtime.js";
 
 const plugin = {
-  id: "signal",
-  name: "Signal",
-  description: "Signal channel plugin",
+  id: "signal-custom",
+  name: "Signal Custom",
+  description: "Signal channel plugin (custom fork baseline)",
   configSchema: emptyPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
     setSignalRuntime(api.runtime);
