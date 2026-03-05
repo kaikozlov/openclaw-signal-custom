@@ -1,15 +1,16 @@
 # Sync Status
 
-Generated (UTC): 2026-03-05 22:02:24
+Generated (UTC): 2026-03-05 22:05:30
 
 Main branch: `main`
 Upstream snapshot branch: `upstream-signal`
 
-- `main` commits ahead of `upstream-signal`: 22
+- `main` commits ahead of `upstream-signal`: 23
 - `upstream-signal` commits ahead of `main`: 0
 
 ## Commits In `main` Not In `upstream-signal`
 
+- d59bd39 Signal: harden monitor and reaction guards
 - 9c5e6e1 Signal: harden inbound event handling
 - 3f4d8bf Signal: harden probe for JSON-RPC-only daemons
 - 68b5062 Signal: remove built-in action fallback

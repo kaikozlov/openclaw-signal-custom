@@ -33,7 +33,7 @@ Done now:
 Still not fully hardened:
 
 - generic runtime helper usage for media staging / markdown table mode
-- remaining pairing/isolation watchlist PRs not yet ported
+- remaining hardening is mostly generic-runtime cleanup, not known Signal ownership gaps
 
 ## Workstreams
 
@@ -97,6 +97,12 @@ Additional open Signal PRs already ported here:
 - #35600
 - #35490
 
+Reviewed and regression-covered here without code changes:
+
+- #26029
+- #26617
+- #26639
+
 ## Remaining Runtime Seams
 
 - `src/signal/send.ts`
@@ -113,8 +119,7 @@ These are generic host utility seams, not built-in `signal` ownership seams. The
 
 Focus after the standalone baseline:
 
-1. review pairing/allowlist isolation fixes (`#26029`, `#26617`, `#26639`)
-2. decide whether to replace the remaining generic runtime helper seams
+1. decide whether to replace the remaining generic runtime helper seams
 
 ## Hard Rule
 
