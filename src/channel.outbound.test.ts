@@ -26,7 +26,6 @@ describe("signal outbound cfg threading", () => {
     });
 
     expect(sendSignal).toHaveBeenCalledWith("+15551230000", "hello", {
-      cfg,
       maxBytes: 12 * 1024 * 1024,
       accountId: "work",
     });
@@ -53,7 +52,6 @@ describe("signal outbound cfg threading", () => {
     });
 
     expect(sendSignal).toHaveBeenCalledWith("+15559870000", "photo", {
-      cfg,
       mediaUrl: "https://example.com/a.jpg",
       maxBytes: 7 * 1024 * 1024,
       accountId: "default",
