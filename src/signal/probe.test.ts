@@ -30,18 +30,51 @@ describe("probeSignal", () => {
     expect(result.status).toBe(200);
   });
 
-  it("returns ok=false when /check fails", async () => {
+  it("returns ok=true when /check fails but JSON-RPC version succeeds", async () => {
+    signalCheckMock.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      error: "HTTP 404",
+    });
+    signalRpcRequestMock.mockResolvedValueOnce({ version: "0.13.24" });
+
+    const result = await probeSignal("http://127.0.0.1:8080", 1000);
+
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe(null);
+    expect(result.version).toBe("0.13.24");
+  });
+
+  it("returns ok=false when both /check and JSON-RPC fail", async () => {
     signalCheckMock.mockResolvedValueOnce({
       ok: false,
       status: 503,
       error: "HTTP 503",
     });
+    signalRpcRequestMock.mockRejectedValueOnce(new Error("connection refused"));
 
     const result = await probeSignal("http://127.0.0.1:8080", 1000);
 
     expect(result.ok).toBe(false);
     expect(result.status).toBe(503);
     expect(result.version).toBe(null);
+    expect(result.error).toBe("HTTP 503");
+  });
+
+  it("returns ok=true with error when /check passes but JSON-RPC fails", async () => {
+    signalCheckMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      error: null,
+    });
+    signalRpcRequestMock.mockRejectedValueOnce(new Error("rpc timeout"));
+
+    const result = await probeSignal("http://127.0.0.1:8080", 1000);
+
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe(200);
+    expect(result.version).toBe(null);
+    expect(result.error).toBe("rpc timeout");
   });
 });
 

@@ -32,7 +32,30 @@ export async function probeSignal(baseUrl: string, timeoutMs: number): Promise<S
   };
 
   const check = await signalCheck(baseUrl, timeoutMs);
-  if (!check.ok) {
+  const restOk = check.ok;
+
+  try {
+    const version = await signalRpcRequest("version", undefined, {
+      baseUrl,
+      timeoutMs,
+    });
+    return {
+      ...result,
+      ok: true,
+      status: restOk ? (check.status ?? 200) : null,
+      version: parseSignalVersion(version),
+      elapsedMs: Date.now() - started,
+    };
+  } catch (error) {
+    if (restOk) {
+      return {
+        ...result,
+        ok: true,
+        status: check.status ?? null,
+        error: error instanceof Error ? error.message : String(error),
+        elapsedMs: Date.now() - started,
+      };
+    }
     return {
       ...result,
       status: check.status ?? null,
@@ -40,21 +63,4 @@ export async function probeSignal(baseUrl: string, timeoutMs: number): Promise<S
       elapsedMs: Date.now() - started,
     };
   }
-
-  try {
-    const version = await signalRpcRequest("version", undefined, {
-      baseUrl,
-      timeoutMs,
-    });
-    result.version = parseSignalVersion(version);
-  } catch (error) {
-    result.error = error instanceof Error ? error.message : String(error);
-  }
-
-  return {
-    ...result,
-    ok: true,
-    status: check.status ?? null,
-    elapsedMs: Date.now() - started,
-  };
 }

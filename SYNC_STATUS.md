@@ -1,15 +1,16 @@
 # Sync Status
 
-Generated (UTC): 2026-03-05 21:09:52
+Generated (UTC): 2026-03-05 21:51:22
 
 Main branch: `main`
 Upstream snapshot branch: `upstream-signal`
 
-- `main` commits ahead of `upstream-signal`: 19
+- `main` commits ahead of `upstream-signal`: 20
 - `upstream-signal` commits ahead of `main`: 0
 
 ## Commits In `main` Not In `upstream-signal`
 
+- 68b5062 Signal: remove built-in action fallback
 - 8213f66 Signal: add local monitor and inbound stack
 - 07222e9 Signal: add local daemon and probe
 - 740a92e Signal: make signal-custom a standalone channel baseline
