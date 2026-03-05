@@ -34,19 +34,20 @@ import {
 } from "openclaw/plugin-sdk";
 import { getSignalRuntime } from "./runtime.js";
 
+type ReactionToolContext = {
+  currentMessageId?: string | number;
+};
+
 const signalMessageActions: ChannelMessageActionAdapter = {
   listActions: (ctx) => getSignalRuntime().channel.signal.messageActions?.listActions?.(ctx) ?? [],
   supportsAction: (ctx) =>
     getSignalRuntime().channel.signal.messageActions?.supportsAction?.(ctx) ?? false,
   handleAction: async (ctx) => {
     if (ctx.action === "react") {
-      const targetAuthor =
-        typeof ctx.params.targetAuthor === "string" ? ctx.params.targetAuthor.trim() : "";
-      const targetAuthorUuid =
-        typeof ctx.params.targetAuthorUuid === "string" ? ctx.params.targetAuthorUuid.trim() : "";
-      if (!targetAuthor && !targetAuthorUuid) {
-        throw new Error("targetAuthor or targetAuthorUuid required for Signal reactions.");
-      }
+      validateAndNormalizeReactionParams({
+        args: ctx.params,
+        toolContext: ctx.toolContext,
+      });
     }
     const ma = getSignalRuntime().channel.signal.messageActions;
     if (!ma?.handleAction) {
@@ -137,6 +138,68 @@ function resolveSignalPayloadMentions(payload: ReplyPayload): SignalMentionRange
   }
   const typedSignalData = signalData as SignalPayloadChannelData;
   return parseSignalMentionRanges(typedSignalData.mentions);
+}
+
+function normalizeSignalReactionAuthor(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const withoutSignal = trimmed.replace(/^signal:/i, "").trim();
+  if (!withoutSignal) {
+    return "";
+  }
+  if (withoutSignal.toLowerCase().startsWith("uuid:")) {
+    return withoutSignal.slice("uuid:".length).trim();
+  }
+  return withoutSignal;
+}
+
+function resolveReactionMessageId(params: {
+  args: Record<string, unknown>;
+  toolContext?: ReactionToolContext;
+}): string | number | undefined {
+  const direct = params.args.messageId;
+  if (typeof direct === "string" || typeof direct === "number") {
+    return direct;
+  }
+  return params.toolContext?.currentMessageId;
+}
+
+function validateAndNormalizeReactionParams(params: {
+  args: Record<string, unknown>;
+  toolContext?: ReactionToolContext;
+}) {
+  const targetAuthorRaw =
+    typeof params.args.targetAuthor === "string" ? params.args.targetAuthor : "";
+  const targetAuthorUuidRaw =
+    typeof params.args.targetAuthorUuid === "string" ? params.args.targetAuthorUuid : "";
+  const targetAuthor = normalizeSignalReactionAuthor(targetAuthorRaw);
+  const targetAuthorUuid = normalizeSignalReactionAuthor(targetAuthorUuidRaw);
+  if (!targetAuthor && !targetAuthorUuid) {
+    throw new Error("targetAuthor or targetAuthorUuid required for Signal reactions.");
+  }
+  if (targetAuthor) {
+    params.args.targetAuthor = targetAuthor;
+  }
+  if (targetAuthorUuid) {
+    params.args.targetAuthorUuid = targetAuthorUuid;
+  }
+
+  const messageId = resolveReactionMessageId(params);
+  if (messageId != null) {
+    const timestamp = Number.parseInt(String(messageId), 10);
+    if (!Number.isFinite(timestamp)) {
+      throw new Error(`Invalid messageId: ${String(messageId)}. Expected numeric timestamp.`);
+    }
+    params.args.messageId = String(timestamp);
+  }
+
+  const emoji = typeof params.args.emoji === "string" ? params.args.emoji.trim() : "";
+  if (!emoji) {
+    throw new Error("Emoji required for Signal reactions.");
+  }
+  params.args.emoji = emoji;
 }
 
 function resolveSenderScopedToolPolicy(

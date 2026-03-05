@@ -53,7 +53,7 @@ Make `openclaw-signal-custom` the source of truth for Signal behavior while stay
 | #27146 | outbound stickers + search | `src/signal/send.ts` + action wiring | Medium | Planned |
 | #27147 | directory/group lookup RPC + adapter | `src/signal/directory.ts`, `src/signal/groups.ts`, `src/channel.ts` | Medium | Planned |
 | #27148 | outbound native mentions | `src/signal/send.ts` | Low | In progress (payload passthrough landed) |
-| #27149 | reaction hardening | `src/channel.ts` action prevalidation (phase 1) + future local send-reactions parity | Low | In progress |
+| #27149 | reaction hardening | `src/channel.ts` action prevalidation/normalization + future local send-reactions parity | Low | In progress |
 | #27155 | persistent TCP socket transport | `src/signal/socket-client.ts`, `src/signal/client.ts` | Medium/High | Planned |
 | #27169 | silent sends (`noUrgent`) | `src/channel.ts` outbound passthrough + future local send module | Very low | Done (adapter passthrough) |
 | #27171 | group management/member info actions | action + groups/directory modules | Medium | Planned |

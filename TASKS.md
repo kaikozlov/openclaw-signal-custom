@@ -17,7 +17,7 @@ This is the execution checklist. We keep it updated as we land each slice.
 
 ## Phase 2: WS1 Outbound/Action Parity
 
-- [ ] Port `#27149` reaction hardening (in progress: action prevalidation landed)
+- [ ] Port `#27149` reaction hardening (in progress: action prevalidation + normalization guards landed)
 - [ ] Port `#27148` outbound native mentions (in progress: payload mention passthrough landed)
 - [ ] Port `#27146` stickers + sticker search
 - [ ] Port outbound subset of `#27145` edit/delete support

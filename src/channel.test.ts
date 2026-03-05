@@ -86,7 +86,7 @@ describe("signalPlugin outbound sendMedia", () => {
   });
 
   it("requires targetAuthor for react actions before runtime handler call", async () => {
-    const handleAction = vi.fn(async () => ({ content: [] }));
+    const handleAction = vi.fn(async (_ctx: unknown) => ({ content: [] }));
     setSignalRuntime({
       channel: {
         signal: {
@@ -112,9 +112,101 @@ describe("signalPlugin outbound sendMedia", () => {
         channel: "signal",
         action: "react",
         cfg: {} as never,
-        params: { targetAuthor: "+15550001111" },
+        params: { targetAuthor: "+15550001111", emoji: "✅" },
       } as never),
     ).resolves.toEqual({ content: [] });
     expect(handleAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes reaction targetAuthor/messageId/emoji before runtime handler", async () => {
+    const handleAction = vi.fn(async (_ctx: unknown) => ({ content: [] }));
+    setSignalRuntime({
+      channel: {
+        signal: {
+          messageActions: {
+            handleAction,
+          },
+        },
+      },
+    } as never);
+
+    await expect(
+      signalPlugin.actions?.handleAction?.({
+        channel: "signal",
+        action: "react",
+        cfg: {} as never,
+        params: {
+          targetAuthor: "signal:uuid:123e4567-e89b-12d3-a456-426614174000",
+          messageId: "00123",
+          emoji: " ✅ ",
+        },
+      } as never),
+    ).resolves.toEqual({ content: [] });
+
+    expect(handleAction).toHaveBeenCalledTimes(1);
+    const firstCall = handleAction.mock.calls.at(0);
+    if (!firstCall) {
+      throw new Error("signal runtime action handler not called");
+    }
+    const forwarded = firstCall[0] as { params: Record<string, unknown> };
+    expect(forwarded.params).toEqual(
+      expect.objectContaining({
+        targetAuthor: "123e4567-e89b-12d3-a456-426614174000",
+        messageId: "123",
+        emoji: "✅",
+      }),
+    );
+  });
+
+  it("rejects invalid reaction messageId before runtime handler call", async () => {
+    const handleAction = vi.fn(async (_ctx: unknown) => ({ content: [] }));
+    setSignalRuntime({
+      channel: {
+        signal: {
+          messageActions: {
+            handleAction,
+          },
+        },
+      },
+    } as never);
+
+    await expect(
+      signalPlugin.actions?.handleAction?.({
+        channel: "signal",
+        action: "react",
+        cfg: {} as never,
+        params: {
+          targetAuthor: "+15550001111",
+          emoji: "✅",
+          messageId: "not-a-number",
+        },
+      } as never),
+    ).rejects.toThrow(/Invalid messageId/);
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it("rejects reaction when emoji is missing", async () => {
+    const handleAction = vi.fn(async (_ctx: unknown) => ({ content: [] }));
+    setSignalRuntime({
+      channel: {
+        signal: {
+          messageActions: {
+            handleAction,
+          },
+        },
+      },
+    } as never);
+
+    await expect(
+      signalPlugin.actions?.handleAction?.({
+        channel: "signal",
+        action: "react",
+        cfg: {} as never,
+        params: {
+          targetAuthor: "+15550001111",
+        },
+      } as never),
+    ).rejects.toThrow(/Emoji required/);
+    expect(handleAction).not.toHaveBeenCalled();
   });
 });
