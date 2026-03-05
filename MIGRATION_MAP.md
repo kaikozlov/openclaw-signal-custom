@@ -49,7 +49,7 @@ Make `openclaw-signal-custom` the source of truth for Signal behavior while stay
 | #27107 | groups dock adapter | `src/channel.ts` + helper module | Low | Done |
 | #27108 | mention strip patterns | `src/channel.ts` | Very low | Done |
 | #27144 | typed RPC errors + retry/backoff | `src/signal/client.ts` (plugin-local copy) | Medium | In progress (client foundation landed) |
-| #27145 | outbound edit/delete | `src/signal/send.ts` + actions wiring | Medium | Planned |
+| #27145 | outbound edit/delete | `src/signal/send.ts` + actions wiring | Medium | In progress (plugin-local edit/delete actions landed) |
 | #27146 | outbound stickers + search | `src/signal/send.ts` + action wiring | Medium | Planned |
 | #27147 | directory/group lookup RPC + adapter | `src/signal/directory.ts`, `src/signal/groups.ts`, `src/channel.ts` | Medium | Planned |
 | #27148 | outbound native mentions | `src/signal/send.ts` | Low | In progress (payload passthrough landed) |

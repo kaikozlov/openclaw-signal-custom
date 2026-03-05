@@ -5,6 +5,7 @@ import { setSignalRuntime } from "./runtime.js";
 describe("signalPlugin outbound sendMedia", () => {
   it("declares blockStreaming and mention strip patterns", () => {
     expect(signalPlugin.capabilities?.blockStreaming).toBe(true);
+    expect(signalPlugin.capabilities?.edit).toBe(true);
     expect(signalPlugin.mentions?.stripPatterns?.({} as never)).toEqual(["\uFFFC"]);
   });
 
@@ -208,5 +209,90 @@ describe("signalPlugin outbound sendMedia", () => {
       } as never),
     ).rejects.toThrow(/Emoji required/);
     expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it("lists edit/delete actions from plugin-local gate when enabled", () => {
+    setSignalRuntime({
+      channel: {
+        signal: {
+          messageActions: {
+            listActions: () => ["send"],
+          },
+        },
+      },
+    } as never);
+
+    const cfg = {
+      channels: {
+        signal: {
+          account: "+15550001111",
+          httpUrl: "http://signal.local",
+        },
+      },
+    } as never;
+    const actions = signalPlugin.actions?.listActions?.({ cfg }) ?? [];
+    expect(actions).toContain("send");
+    expect(actions).toContain("edit");
+    expect(actions).toContain("delete");
+  });
+
+  it("handles edit action locally without runtime messageActions.handleAction", async () => {
+    const handleAction = vi.fn(async (_ctx: unknown) => ({ content: [] }));
+    setSignalRuntime({
+      channel: {
+        signal: {
+          messageActions: {
+            handleAction,
+          },
+        },
+      },
+    } as never);
+
+    const originalFetch = global.fetch;
+    const fetchMock = vi.fn<typeof fetch>();
+    fetchMock.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      statusText: "OK",
+      text: async () =>
+        JSON.stringify({
+          jsonrpc: "2.0",
+          result: { timestamp: 1700000000001 },
+        }),
+    } as Response);
+    global.fetch = fetchMock;
+    try {
+      const result = await signalPlugin.actions?.handleAction?.({
+        channel: "signal",
+        action: "edit",
+        cfg: {
+          channels: {
+            signal: {
+              account: "+15550001111",
+              httpUrl: "http://signal.local",
+            },
+          },
+        } as never,
+        params: {
+          to: "signal:+15550002222",
+          messageId: "1700000000000",
+          message: "edited text",
+        },
+      } as never);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(handleAction).not.toHaveBeenCalled();
+      expect(result).toEqual(
+        expect.objectContaining({
+          details: expect.objectContaining({
+            ok: true,
+            edited: true,
+            messageId: "1700000000000",
+          }),
+        }),
+      );
+    } finally {
+      global.fetch = originalFetch;
+    }
   });
 });

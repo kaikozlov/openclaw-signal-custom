@@ -1,0 +1,205 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import { resolveSignalAccount } from "openclaw/plugin-sdk";
+import { signalRpcRequestWithRetry } from "./client.js";
+
+export type SignalActionRpcOpts = {
+  accountId?: string;
+  timeoutMs?: number;
+};
+
+export type SignalSendResult = {
+  messageId: string;
+  timestamp?: number;
+};
+
+type SignalTarget =
+  | { type: "recipient"; recipient: string }
+  | { type: "group"; groupId: string }
+  | { type: "username"; username: string };
+
+type SignalTargetParams = {
+  recipient?: string[];
+  groupId?: string;
+  username?: string[];
+};
+
+type SignalTargetAllowlist = {
+  recipient?: boolean;
+  group?: boolean;
+  username?: boolean;
+};
+
+type SignalRetryConfig = {
+  attempts?: number;
+  minDelayMs?: number;
+  maxDelayMs?: number;
+  jitter?: number;
+};
+
+function parseTarget(raw: string): SignalTarget {
+  let value = raw.trim();
+  if (!value) {
+    throw new Error("Signal recipient is required");
+  }
+  const lower = value.toLowerCase();
+  if (lower.startsWith("signal:")) {
+    value = value.slice("signal:".length).trim();
+  }
+  const normalized = value.toLowerCase();
+  if (normalized.startsWith("group:")) {
+    return { type: "group", groupId: value.slice("group:".length).trim() };
+  }
+  if (normalized.startsWith("username:")) {
+    return {
+      type: "username",
+      username: value.slice("username:".length).trim(),
+    };
+  }
+  if (normalized.startsWith("u:")) {
+    return {
+      type: "username",
+      username: value.slice("u:".length).trim(),
+    };
+  }
+  return { type: "recipient", recipient: value };
+}
+
+function buildTargetParams(
+  target: SignalTarget,
+  allow: SignalTargetAllowlist,
+): SignalTargetParams | null {
+  if (target.type === "recipient") {
+    if (!allow.recipient) {
+      return null;
+    }
+    return { recipient: [target.recipient] };
+  }
+  if (target.type === "group") {
+    if (!allow.group) {
+      return null;
+    }
+    return { groupId: target.groupId };
+  }
+  if (target.type === "username") {
+    if (!allow.username) {
+      return null;
+    }
+    return { username: [target.username] };
+  }
+  return null;
+}
+
+function parseRetryConfig(raw: unknown): SignalRetryConfig | undefined {
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const retry = raw as Record<string, unknown>;
+  return {
+    ...(typeof retry.attempts === "number" ? { attempts: retry.attempts } : {}),
+    ...(typeof retry.minDelayMs === "number" ? { minDelayMs: retry.minDelayMs } : {}),
+    ...(typeof retry.maxDelayMs === "number" ? { maxDelayMs: retry.maxDelayMs } : {}),
+    ...(typeof retry.jitter === "number" ? { jitter: retry.jitter } : {}),
+  };
+}
+
+function resolveSignalRpcContext(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+}) {
+  const accountInfo = resolveSignalAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  const accountRaw = accountInfo.config.account;
+  const account = typeof accountRaw === "string" ? accountRaw.trim() : "";
+  const retry = parseRetryConfig((accountInfo.config as { retry?: unknown }).retry);
+  return {
+    accountInfo,
+    baseUrl: accountInfo.baseUrl,
+    account: account || undefined,
+    retry,
+  };
+}
+
+export async function editMessageSignal(params: {
+  cfg: OpenClawConfig;
+  to: string;
+  text: string;
+  editTimestamp: number;
+  opts?: SignalActionRpcOpts;
+}): Promise<SignalSendResult> {
+  if (!Number.isFinite(params.editTimestamp) || params.editTimestamp <= 0) {
+    throw new Error("Signal edit requires a valid editTimestamp");
+  }
+  const targetParams = buildTargetParams(parseTarget(params.to), {
+    recipient: true,
+    group: true,
+    username: true,
+  });
+  if (!targetParams) {
+    throw new Error("Signal recipient is required");
+  }
+  const content = params.text.trim();
+  if (!content) {
+    throw new Error("Signal edit requires text");
+  }
+
+  const context = resolveSignalRpcContext({
+    cfg: params.cfg,
+    accountId: params.opts?.accountId,
+  });
+  const rpcParams: Record<string, unknown> = {
+    message: content,
+    editTimestamp: params.editTimestamp,
+    ...targetParams,
+  };
+  if (context.account) {
+    rpcParams.account = context.account;
+  }
+  const result = await signalRpcRequestWithRetry<{ timestamp?: number }>("send", rpcParams, {
+    baseUrl: context.baseUrl,
+    timeoutMs: params.opts?.timeoutMs,
+    retry: context.retry,
+  });
+  const timestamp = result?.timestamp;
+  return {
+    messageId: timestamp ? String(timestamp) : String(params.editTimestamp),
+    timestamp,
+  };
+}
+
+export async function deleteMessageSignal(params: {
+  cfg: OpenClawConfig;
+  to: string;
+  targetTimestamp: number;
+  opts?: SignalActionRpcOpts;
+}): Promise<void> {
+  if (!Number.isFinite(params.targetTimestamp) || params.targetTimestamp <= 0) {
+    throw new Error("Signal delete requires a valid targetTimestamp");
+  }
+  const targetParams = buildTargetParams(parseTarget(params.to), {
+    recipient: true,
+    group: true,
+    username: true,
+  });
+  if (!targetParams) {
+    throw new Error("Signal recipient is required");
+  }
+
+  const context = resolveSignalRpcContext({
+    cfg: params.cfg,
+    accountId: params.opts?.accountId,
+  });
+  const rpcParams: Record<string, unknown> = {
+    targetTimestamp: params.targetTimestamp,
+    ...targetParams,
+  };
+  if (context.account) {
+    rpcParams.account = context.account;
+  }
+  await signalRpcRequestWithRetry("remoteDelete", rpcParams, {
+    baseUrl: context.baseUrl,
+    timeoutMs: params.opts?.timeoutMs,
+    retry: context.retry,
+  });
+}

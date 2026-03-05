@@ -4,11 +4,13 @@ import {
   buildBaseChannelStatusSummary,
   buildChannelConfigSchema,
   collectStatusIssuesFromLastError,
+  createActionGate,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   formatPairingApproveHint,
   getChatChannelMeta,
+  jsonResult,
   listSignalAccountIds,
   looksLikeSignalTargetId,
   migrateBaseNameToDefaultAccount,
@@ -21,6 +23,7 @@ import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveSignalAccount,
+  readStringParam,
   setAccountEnabledInConfigSection,
   signalOnboardingAdapter,
   SignalConfigSchema,
@@ -33,16 +36,88 @@ import {
   type ResolvedSignalAccount,
 } from "openclaw/plugin-sdk";
 import { getSignalRuntime } from "./runtime.js";
+import { deleteMessageSignal, editMessageSignal } from "./signal/send-actions.js";
 
 type ReactionToolContext = {
   currentMessageId?: string | number;
 };
 
 const signalMessageActions: ChannelMessageActionAdapter = {
-  listActions: (ctx) => getSignalRuntime().channel.signal.messageActions?.listActions?.(ctx) ?? [],
-  supportsAction: (ctx) =>
-    getSignalRuntime().channel.signal.messageActions?.supportsAction?.(ctx) ?? false,
+  listActions: ({ cfg }) => {
+    const runtimeActions = getSignalRuntime().channel.signal.messageActions?.listActions?.({ cfg }) ?? [];
+    const actions = new Set(runtimeActions);
+    const configuredAccounts = listSignalAccountIds(cfg)
+      .map((accountId) => resolveSignalAccount({ cfg, accountId }))
+      .filter((account) => account.enabled && account.configured);
+    if (configuredAccounts.length === 0) {
+      return Array.from(actions);
+    }
+    if (actions.size === 0) {
+      actions.add("send");
+    }
+    const editEnabled = configuredAccounts.some((account) =>
+      createSignalActionGate(account.config.actions)("editMessage"),
+    );
+    if (editEnabled) {
+      actions.add("edit");
+    }
+    const deleteEnabled = configuredAccounts.some((account) =>
+      createSignalActionGate(account.config.actions)("deleteMessage"),
+    );
+    if (deleteEnabled) {
+      actions.add("delete");
+    }
+    return Array.from(actions);
+  },
+  supportsAction: ({ action }) =>
+    action === "edit" ||
+    action === "delete" ||
+    action === "unsend" ||
+    (getSignalRuntime().channel.signal.messageActions?.supportsAction?.({ action }) ?? false),
   handleAction: async (ctx) => {
+    if (ctx.action === "edit") {
+      const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
+      if (!createSignalActionGate(actionConfig)("editMessage")) {
+        throw new Error("Signal edit is disabled via actions.editMessage.");
+      }
+      const recipient = readSignalRecipientParam(ctx.params);
+      const messageId = readStringParam(ctx.params, "messageId", {
+        required: true,
+        label: "messageId (timestamp)",
+      });
+      const content = readStringParam(ctx.params, "message", {
+        required: true,
+        allowEmpty: false,
+      });
+      const timestamp = parseSignalMessageTimestamp(messageId);
+      await editMessageSignal({
+        cfg: ctx.cfg,
+        to: recipient,
+        text: content,
+        editTimestamp: timestamp,
+        opts: { accountId: ctx.accountId ?? undefined },
+      });
+      return jsonResult({ ok: true, edited: true, messageId });
+    }
+    if (ctx.action === "delete" || ctx.action === "unsend") {
+      const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
+      if (!createSignalActionGate(actionConfig)("deleteMessage")) {
+        throw new Error("Signal delete is disabled via actions.deleteMessage.");
+      }
+      const recipient = readSignalRecipientParam(ctx.params);
+      const messageId = readStringParam(ctx.params, "messageId", {
+        required: true,
+        label: "messageId (timestamp)",
+      });
+      const timestamp = parseSignalMessageTimestamp(messageId);
+      await deleteMessageSignal({
+        cfg: ctx.cfg,
+        to: recipient,
+        targetTimestamp: timestamp,
+        opts: { accountId: ctx.accountId ?? undefined },
+      });
+      return jsonResult({ ok: true, deleted: true, messageId });
+    }
     if (ctx.action === "react") {
       validateAndNormalizeReactionParams({
         args: ctx.params,
@@ -79,8 +154,19 @@ type SignalPayloadChannelData = {
   mentions?: unknown;
 };
 
+type SignalActionConfig = {
+  reactions?: boolean;
+  editMessage?: boolean;
+  deleteMessage?: boolean;
+  stickers?: boolean;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function createSignalActionGate(actions: SignalActionConfig | undefined) {
+  return createActionGate<SignalActionConfig>(actions);
 }
 
 function normalizeSignalMentionRecipient(raw: string, index: number): string {
@@ -200,6 +286,24 @@ function validateAndNormalizeReactionParams(params: {
     throw new Error("Emoji required for Signal reactions.");
   }
   params.args.emoji = emoji;
+}
+
+function readSignalRecipientParam(params: Record<string, unknown>): string {
+  return (
+    readStringParam(params, "recipient") ??
+    readStringParam(params, "to", {
+      required: true,
+      label: "recipient (phone number, UUID, or group)",
+    })
+  );
+}
+
+function parseSignalMessageTimestamp(raw: string): number {
+  const timestamp = Number.parseInt(raw, 10);
+  if (!Number.isFinite(timestamp)) {
+    throw new Error(`Invalid messageId: ${raw}. Expected numeric timestamp.`);
+  }
+  return timestamp;
 }
 
 function resolveSenderScopedToolPolicy(
@@ -380,6 +484,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     chatTypes: ["direct", "group"],
     media: true,
     reactions: true,
+    edit: true,
     blockStreaming: true,
   },
   actions: signalMessageActions,
