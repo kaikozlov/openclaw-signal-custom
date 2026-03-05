@@ -171,15 +171,17 @@ function createSignalDaemonLifecycle(params: { abortSignal?: AbortSignal }) {
   };
   const attach = (handle: SignalDaemonHandle) => {
     daemonHandle = handle;
-    void handle.exited.then((exit) => {
-      if (daemonStopRequested || params.abortSignal?.aborted) {
-        return;
-      }
-      daemonExitError = new Error(formatSignalDaemonExit(exit));
-      if (!daemonAbortController.signal.aborted) {
-        daemonAbortController.abort(daemonExitError);
-      }
-    });
+    void handle.exited
+      .then((exit) => {
+        if (daemonStopRequested || params.abortSignal?.aborted) {
+          return;
+        }
+        daemonExitError = new Error(formatSignalDaemonExit(exit));
+        if (!daemonAbortController.signal.aborted) {
+          daemonAbortController.abort(daemonExitError);
+        }
+      })
+      .catch(() => {});
   };
   const getExitError = () => daemonExitError;
   return {
@@ -197,11 +199,12 @@ function normalizeAllowList(raw?: Array<string | number>): string[] {
 
 function resolveSignalReactionTargets(reaction: SignalReactionMessage): SignalReactionTarget[] {
   const targets: SignalReactionTarget[] = [];
-  const uuid = reaction.targetAuthorUuid?.trim();
+  const uuid =
+    typeof reaction.targetAuthorUuid === "string" ? reaction.targetAuthorUuid.trim() : "";
   if (uuid) {
     targets.push({ kind: "uuid", id: uuid, display: `uuid:${uuid}` });
   }
-  const author = reaction.targetAuthor?.trim();
+  const author = typeof reaction.targetAuthor === "string" ? reaction.targetAuthor.trim() : "";
   if (author) {
     const sender = resolveSignalSender({ sourceNumber: author });
     if (sender?.kind === "phone") {
@@ -217,9 +220,12 @@ function isSignalReactionMessage(
   if (!reaction) {
     return false;
   }
-  const emoji = reaction.emoji?.trim();
+  const emoji = typeof reaction.emoji === "string" ? reaction.emoji.trim() : "";
   const timestamp = reaction.targetSentTimestamp;
-  const hasTarget = Boolean(reaction.targetAuthor?.trim() || reaction.targetAuthorUuid?.trim());
+  const hasTarget = Boolean(
+    (typeof reaction.targetAuthor === "string" && reaction.targetAuthor.trim()) ||
+      (typeof reaction.targetAuthorUuid === "string" && reaction.targetAuthorUuid.trim()),
+  );
   return Boolean(emoji && typeof timestamp === "number" && timestamp > 0 && hasTarget);
 }
 
@@ -236,8 +242,10 @@ function shouldEmitSignalReactionNotification(params: {
     return false;
   }
   if (effectiveMode === "own") {
-    const resolvedAccount = account
-      ? resolveSignalSender({ sourceNumber: account }) ?? resolveSignalSender({ sourceUuid: account })
+    const accountId = typeof account === "string" ? account.trim() : "";
+    const resolvedAccount = accountId
+      ? resolveSignalSender({ sourceNumber: accountId }) ??
+        resolveSignalSender({ sourceUuid: accountId })
       : null;
     if (!resolvedAccount || !targets || targets.length === 0) {
       return false;
@@ -361,7 +369,12 @@ async function fetchAttachment(params: {
   if (!result?.data) {
     return null;
   }
-  const buffer = Buffer.from(result.data, "base64");
+  let buffer: Buffer;
+  try {
+    buffer = Buffer.from(result.data, "base64");
+  } catch {
+    return null;
+  }
   const saved = await getSignalRuntime().channel.media.saveMediaBuffer(
     buffer,
     attachment.contentType ?? undefined,
@@ -497,8 +510,11 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     SIGNAL_CHANNEL_ID,
     accountInfo.accountId,
   );
-  const baseUrl = opts.baseUrl?.trim() || accountInfo.baseUrl;
-  const account = opts.account?.trim() || accountInfo.config.account?.trim();
+  const baseUrl =
+    (typeof opts.baseUrl === "string" ? opts.baseUrl.trim() : "") || accountInfo.baseUrl;
+  const account =
+    (typeof opts.account === "string" ? opts.account.trim() : "") ||
+    (typeof accountInfo.config.account === "string" ? accountInfo.config.account.trim() : "");
   const dmPolicy = accountInfo.config.dmPolicy ?? "pairing";
   const allowFrom = normalizeAllowList(opts.allowFrom ?? accountInfo.config.allowFrom);
   const groupAllowFrom = normalizeAllowList(

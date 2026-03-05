@@ -1,15 +1,16 @@
 # Sync Status
 
-Generated (UTC): 2026-03-05 21:54:08
+Generated (UTC): 2026-03-05 22:02:24
 
 Main branch: `main`
 Upstream snapshot branch: `upstream-signal`
 
-- `main` commits ahead of `upstream-signal`: 21
+- `main` commits ahead of `upstream-signal`: 22
 - `upstream-signal` commits ahead of `main`: 0
 
 ## Commits In `main` Not In `upstream-signal`
 
+- 9c5e6e1 Signal: harden inbound event handling
 - 3f4d8bf Signal: harden probe for JSON-RPC-only daemons
 - 68b5062 Signal: remove built-in action fallback
 - 8213f66 Signal: add local monitor and inbound stack
@@ -65,6 +66,7 @@ Upstream snapshot branch: `upstream-signal`
 - src/signal/groups.ts
 - src/signal/identity.ts
 - src/signal/inbound-debounce.ts
+- src/signal/monitor.edge-cases.test.ts
 - src/signal/monitor.test.ts
 - src/signal/monitor.ts
 - src/signal/monitor/access-policy.ts

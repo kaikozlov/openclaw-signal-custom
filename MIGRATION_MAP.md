@@ -33,7 +33,7 @@ Done now:
 Still not fully hardened:
 
 - generic runtime helper usage for media staging / markdown table mode
-- remaining inbound hardening/watchlist PRs not yet ported
+- remaining pairing/isolation watchlist PRs not yet ported
 
 ## Workstreams
 
@@ -43,7 +43,7 @@ Still not fully hardened:
 | WS2 | Outbound/action parity on `signal-custom` | #27104, #27107, #27108, #27145, #27146, #27148, #27149, #27169, #27171 | Done |
 | WS3 | RPC hardening + TCP transport on `signal-custom` | #27144, #27155 | Done |
 | WS4 | Standalone monitor/provider lifecycle | built-in Signal monitor stack | Done |
-| WS5 | Inbound hardening + external Signal PR watchlist | #34546, #28417, #31232, #32026, #33851, #34177, others | Probe + core inbound fixes done |
+| WS5 | Inbound hardening + external Signal PR watchlist | #34546, #28417, #31232, #32026, #33851, #34177, #35931, #35600, #35490, others | Probe + inbound + guard fixes done |
 
 ## Your PR Matrix
 
@@ -62,6 +62,41 @@ Still not fully hardened:
 | #27169 | silent sends (`noUrgent`) | Done |
 | #27171 | group-management actions | Done |
 
+## Integrated PR Summary
+
+Current PR-backed port count:
+
+- your PRs ported: `12`
+- other Signal PRs ported: `9`
+- total PR-backed ports integrated: `21`
+
+Your PR set now integrated here:
+
+- #27104
+- #27107
+- #27108
+- #27144
+- #27145
+- #27146
+- #27147
+- #27148
+- #27149
+- #27155
+- #27169
+- #27171
+
+Additional open Signal PRs already ported here:
+
+- #33851
+- #34177
+- #34546
+- #28417
+- #31232
+- #32026
+- #35931
+- #35600
+- #35490
+
 ## Remaining Runtime Seams
 
 - `src/signal/send.ts`
@@ -78,9 +113,8 @@ These are generic host utility seams, not built-in `signal` ownership seams. The
 
 Focus after the standalone baseline:
 
-1. review guard/failure hardening PRs (`#35931`, `#35600`, `#35490`)
-2. review pairing/allowlist isolation fixes (`#26029`, `#26617`, `#26639`)
-3. decide whether to replace the remaining generic runtime helper seams
+1. review pairing/allowlist isolation fixes (`#26029`, `#26617`, `#26639`)
+2. decide whether to replace the remaining generic runtime helper seams
 
 ## Hard Rule
 

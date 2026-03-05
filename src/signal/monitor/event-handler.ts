@@ -495,7 +495,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const hasBareReactionField = !reaction && Boolean(bareReaction) && !messageText && !quoteText;
     if (hasBareReactionField && bareReaction) {
       const senderDisplayBare = formatSignalSenderDisplay(sender);
-      const emojiLabel = bareReaction.emoji?.trim() || "emoji";
+      const emojiLabel =
+        typeof bareReaction.emoji === "string" ? bareReaction.emoji.trim() || "emoji" : "emoji";
       const isRemove = Boolean(bareReaction.isRemove);
       const targetTimestamp = bareReaction.targetSentTimestamp;
       logVerbose(`signal: bare reaction (${emojiLabel}) from ${senderDisplayBare}`);

@@ -290,4 +290,41 @@ describe("signal monitor edge cases", () => {
       }),
     );
   });
+
+  it("does not crash on bare reactions with non-string emoji payloads", async () => {
+    const { dispatchReplyWithBufferedBlockDispatcher, enqueueSystemEvent } = installRuntime();
+    const handler = createHandler({
+      reactionMode: "all",
+      shouldEmitSignalReactionNotification: () => true,
+    });
+
+    await expect(
+      handler({
+        event: "receive",
+        data: JSON.stringify({
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Alice",
+            dataMessage: {
+              message: "",
+              reaction: {
+                emoji: 7,
+                isRemove: false,
+                targetSentTimestamp: 1699999000000,
+              },
+            },
+          },
+        }),
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(enqueueSystemEvent).toHaveBeenCalledOnce();
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      expect.stringContaining("emoji"),
+      expect.objectContaining({
+        contextKey: expect.stringContaining("signal-custom:reaction:added"),
+      }),
+    );
+  });
 });

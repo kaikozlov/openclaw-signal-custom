@@ -114,4 +114,27 @@ describe("signal reactions RPC", () => {
       }),
     ).rejects.toThrow(/Signal sendReaction failed for recipient result/);
   });
+
+  it("does not crash when normalizeSignalId receives a non-string at runtime", async () => {
+    await expect(
+      sendReactionSignal(
+        12345 as never,
+        100,
+        "👍",
+        {
+          cfg,
+        },
+      ),
+    ).rejects.toThrow(/Recipient or groupId is required/i);
+  });
+
+  it("skips non-string targetAuthor candidates without crashing", async () => {
+    await expect(
+      sendReactionSignal("+15550001111", 100, "👍", {
+        cfg,
+        targetAuthor: 42 as never,
+      }),
+    ).rejects.toThrow(/targetAuthor is required for direct reactions/i);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
