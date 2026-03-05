@@ -19,7 +19,7 @@ This is the execution checklist. We keep it updated as we land each slice.
 
 - [ ] Port `#27149` reaction hardening (in progress: action prevalidation + normalization guards landed)
 - [ ] Port `#27148` outbound native mentions (in progress: payload mention passthrough landed)
-- [ ] Port `#27146` stickers + sticker search
+- [ ] Port `#27146` stickers + sticker search (in progress: plugin-local sticker actions landed)
 - [ ] Port outbound subset of `#27145` edit/delete support (in progress: plugin-local actions landed)
 
 ## Phase 3: WS2 RPC + Transport

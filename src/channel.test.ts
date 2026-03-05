@@ -236,6 +236,33 @@ describe("signalPlugin outbound sendMedia", () => {
     expect(actions).toContain("delete");
   });
 
+  it("lists sticker actions when actions.stickers is enabled", () => {
+    setSignalRuntime({
+      channel: {
+        signal: {
+          messageActions: {
+            listActions: () => ["send"],
+          },
+        },
+      },
+    } as never);
+
+    const cfg = {
+      channels: {
+        signal: {
+          account: "+15550001111",
+          httpUrl: "http://signal.local",
+          actions: {
+            stickers: true,
+          },
+        },
+      },
+    } as never;
+    const actions = signalPlugin.actions?.listActions?.({ cfg }) ?? [];
+    expect(actions).toContain("sticker");
+    expect(actions).toContain("sticker-search");
+  });
+
   it("handles edit action locally without runtime messageActions.handleAction", async () => {
     const handleAction = vi.fn(async (_ctx: unknown) => ({ content: [] }));
     setSignalRuntime({
@@ -288,6 +315,69 @@ describe("signalPlugin outbound sendMedia", () => {
             ok: true,
             edited: true,
             messageId: "1700000000000",
+          }),
+        }),
+      );
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it("handles sticker action locally without runtime messageActions.handleAction", async () => {
+    const handleAction = vi.fn(async (_ctx: unknown) => ({ content: [] }));
+    setSignalRuntime({
+      channel: {
+        signal: {
+          messageActions: {
+            handleAction,
+          },
+        },
+      },
+    } as never);
+
+    const originalFetch = global.fetch;
+    const fetchMock = vi.fn<typeof fetch>();
+    fetchMock.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      statusText: "OK",
+      text: async () =>
+        JSON.stringify({
+          jsonrpc: "2.0",
+          result: { timestamp: 1700000000002 },
+        }),
+    } as Response);
+    global.fetch = fetchMock;
+    try {
+      const result = await signalPlugin.actions?.handleAction?.({
+        channel: "signal",
+        action: "sticker",
+        cfg: {
+          channels: {
+            signal: {
+              account: "+15550001111",
+              httpUrl: "http://signal.local",
+              actions: {
+                stickers: true,
+              },
+            },
+          },
+        } as never,
+        params: {
+          to: "signal:+15550002222",
+          packId: "pack-a",
+          stickerNum: 3,
+        },
+      } as never);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(handleAction).not.toHaveBeenCalled();
+      expect(result).toEqual(
+        expect.objectContaining({
+          details: expect.objectContaining({
+            ok: true,
+            packId: "pack-a",
+            stickerId: 3,
           }),
         }),
       );

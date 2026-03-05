@@ -18,6 +18,7 @@ import {
   normalizeE164,
   normalizeSignalMessagingTarget,
   PAIRING_APPROVED_MESSAGE,
+  readNumberParam,
   resolveChannelMediaMaxBytes,
   resolveDefaultSignalAccountId,
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -36,7 +37,12 @@ import {
   type ResolvedSignalAccount,
 } from "openclaw/plugin-sdk";
 import { getSignalRuntime } from "./runtime.js";
-import { deleteMessageSignal, editMessageSignal } from "./signal/send-actions.js";
+import {
+  deleteMessageSignal,
+  editMessageSignal,
+  listStickerPacksSignal,
+  sendStickerSignal,
+} from "./signal/send-actions.js";
 
 type ReactionToolContext = {
   currentMessageId?: string | number;
@@ -67,12 +73,21 @@ const signalMessageActions: ChannelMessageActionAdapter = {
     if (deleteEnabled) {
       actions.add("delete");
     }
+    const stickerEnabled = configuredAccounts.some((account) =>
+      createSignalActionGate(account.config.actions)("stickers", false),
+    );
+    if (stickerEnabled) {
+      actions.add("sticker");
+      actions.add("sticker-search");
+    }
     return Array.from(actions);
   },
   supportsAction: ({ action }) =>
     action === "edit" ||
     action === "delete" ||
     action === "unsend" ||
+    action === "sticker" ||
+    action === "sticker-search" ||
     (getSignalRuntime().channel.signal.messageActions?.supportsAction?.({ action }) ?? false),
   handleAction: async (ctx) => {
     if (ctx.action === "edit") {
@@ -117,6 +132,57 @@ const signalMessageActions: ChannelMessageActionAdapter = {
         opts: { accountId: ctx.accountId ?? undefined },
       });
       return jsonResult({ ok: true, deleted: true, messageId });
+    }
+    if (ctx.action === "sticker") {
+      const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
+      if (!createSignalActionGate(actionConfig)("stickers", false)) {
+        throw new Error("Signal sticker actions are disabled via actions.stickers.");
+      }
+      const recipient = readSignalRecipientParam(ctx.params);
+      const { packId, stickerId } = parseSignalStickerParams(ctx.params);
+      const result = await sendStickerSignal({
+        cfg: ctx.cfg,
+        to: recipient,
+        packId,
+        stickerId,
+        opts: { accountId: ctx.accountId ?? undefined },
+      });
+      return jsonResult({
+        ok: true,
+        messageId: result.messageId,
+        timestamp: result.timestamp,
+        packId,
+        stickerId,
+      });
+    }
+    if (ctx.action === "sticker-search") {
+      const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
+      if (!createSignalActionGate(actionConfig)("stickers", false)) {
+        throw new Error("Signal sticker actions are disabled via actions.stickers.");
+      }
+      const query = readStringParam(ctx.params, "query");
+      const limit = readNumberParam(ctx.params, "limit", { integer: true });
+      const normalizedQuery = query?.trim().toLowerCase();
+      const packs = await listStickerPacksSignal({
+        cfg: ctx.cfg,
+        opts: { accountId: ctx.accountId ?? undefined },
+      });
+      const filtered = normalizedQuery
+        ? packs.filter((pack) => {
+            const fields = [
+              typeof pack.packId === "string" ? pack.packId : "",
+              typeof pack.id === "string" ? pack.id : "",
+              typeof pack.title === "string" ? pack.title : "",
+              typeof pack.author === "string" ? pack.author : "",
+            ]
+              .join(" ")
+              .toLowerCase();
+            return fields.includes(normalizedQuery);
+          })
+        : packs;
+      const capped =
+        typeof limit === "number" && limit > 0 ? filtered.slice(0, Math.trunc(limit)) : filtered;
+      return jsonResult({ ok: true, packs: capped });
     }
     if (ctx.action === "react") {
       validateAndNormalizeReactionParams({
@@ -304,6 +370,64 @@ function parseSignalMessageTimestamp(raw: string): number {
     throw new Error(`Invalid messageId: ${raw}. Expected numeric timestamp.`);
   }
   return timestamp;
+}
+
+function parseSignalStickerParams(params: Record<string, unknown>): {
+  packId: string;
+  stickerId: number;
+} {
+  const stickerIds = readStringArrayParamLoose(params, "stickerId");
+  const packIdParam = readStringParam(params, "packId");
+  const stickerIdParam = readNumberParam(params, "stickerNum", {
+    integer: true,
+  });
+  const firstSticker = stickerIds?.[0]?.trim();
+  if (firstSticker?.includes(":")) {
+    const [packIdRaw, stickerIdRaw] = firstSticker.split(":", 2);
+    const packId = packIdRaw?.trim();
+    const stickerId = Number.parseInt(stickerIdRaw?.trim() ?? "", 10);
+    if (!packId || !Number.isFinite(stickerId) || stickerId < 0) {
+      throw new Error("Signal stickerId must be in packId:stickerId format.");
+    }
+    return { packId, stickerId };
+  }
+  const packId = packIdParam?.trim();
+  if (!packId) {
+    throw new Error("Signal sticker requires packId or stickerId=packId:stickerId.");
+  }
+  const stickerId =
+    stickerIdParam ??
+    (() => {
+      if (!firstSticker) {
+        return Number.NaN;
+      }
+      return Number.parseInt(firstSticker, 10);
+    })();
+  if (!Number.isFinite(stickerId) || stickerId < 0) {
+    throw new Error("Signal sticker requires a non-negative sticker ID.");
+  }
+  return {
+    packId,
+    stickerId: Math.trunc(stickerId),
+  };
+}
+
+function readStringArrayParamLoose(
+  params: Record<string, unknown>,
+  key: string,
+): string[] | undefined {
+  const value = params[key];
+  if (Array.isArray(value)) {
+    const entries = value
+      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+      .filter(Boolean);
+    return entries.length > 0 ? entries : undefined;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? [trimmed] : undefined;
+  }
+  return undefined;
 }
 
 function resolveSenderScopedToolPolicy(
