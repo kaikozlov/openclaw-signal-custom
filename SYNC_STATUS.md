@@ -1,15 +1,16 @@
 # Sync Status
 
-Generated (UTC): 2026-03-05 20:51:33
+Generated (UTC): 2026-03-05 21:07:54
 
 Main branch: `main`
 Upstream snapshot branch: `upstream-signal`
 
-- `main` commits ahead of `upstream-signal`: 17
+- `main` commits ahead of `upstream-signal`: 18
 - `upstream-signal` commits ahead of `main`: 0
 
 ## Commits In `main` Not In `upstream-signal`
 
+- 07222e9 Signal: add local daemon and probe
 - 740a92e Signal: make signal-custom a standalone channel baseline
 - ef5e09c Docs: refresh sync status
 - ccf272a Signal: route outbound sends through local sender
@@ -53,11 +54,14 @@ Upstream snapshot branch: `upstream-signal`
 - src/runtime.ts
 - src/signal/client.test.ts
 - src/signal/client.ts
+- src/signal/daemon.ts
 - src/signal/directory.test.ts
 - src/signal/directory.ts
 - src/signal/format.ts
 - src/signal/groups.test.ts
 - src/signal/groups.ts
+- src/signal/probe.test.ts
+- src/signal/probe.ts
 - src/signal/rpc-context.ts
 - src/signal/send-actions.test.ts
 - src/signal/send-actions.ts

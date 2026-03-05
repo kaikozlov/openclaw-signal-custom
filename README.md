@@ -24,10 +24,15 @@ What is standalone today:
 - reactions, stickers, edit/delete, silent send
 - directory/group lookup and group-management actions
 - retry + TCP socket transport
+- local daemon startup
+- local status probe
+- local monitor/inbound event handling
+- gateway startup wired to the local monitor
 
-What is still pending for full Option 2 parity:
+What still remains after the standalone baseline:
 
-- local daemon/probe/monitor/inbound stack
+- audit the remaining generic runtime helper seams
+- port additional Signal hardening/watchlist PRs
 
 ## Sync upstream Signal changes
 

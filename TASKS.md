@@ -29,17 +29,18 @@
 
 - [x] Copy local `daemon.ts`
 - [x] Copy local `probe.ts`
-- [ ] Copy local `monitor.ts`
-- [ ] Copy local `monitor/access-policy.ts`
-- [ ] Copy local `monitor/event-handler.ts`
-- [ ] Copy local `monitor/event-handler.types.ts`
-- [ ] Copy local `monitor/mentions.ts`
-- [ ] Replace hard-coded built-in `signal` inbound metadata with `signal-custom`
-- [ ] Swap `gateway.startAccount` to local monitor
+- [x] Copy local `monitor.ts`
+- [x] Copy local `monitor/access-policy.ts`
+- [x] Copy local `monitor/event-handler.ts`
+- [x] Copy local `monitor/event-handler.types.ts`
+- [x] Copy local `monitor/mentions.ts`
+- [x] Replace hard-coded built-in `signal` inbound metadata with `signal-custom`
+- [x] Swap `gateway.startAccount` to local monitor
 - [x] Swap `status.probeAccount` to local probe
 
 ## Phase 4: Hardening After Standalone Inbound Lands
 
+- [ ] Audit remaining generic runtime seams (`messageActions`, media staging, markdown table mode)
 - [ ] Port probe reliability fixes (`#33851`, `#34177`)
 - [ ] Port inbound edge-case fixes (`#34546`, `#28417`, `#31232`, `#32026`)
 - [ ] Port defensive guard fixes (`#35931`, `#35600`, `#35490`)
@@ -50,4 +51,4 @@
 1. Copy first, shim second, rewrite last.
 2. Keep `npm run check` green after every slice.
 3. Update this file and `MIGRATION_MAP.md` whenever the boundary changes.
-4. Do not claim Option 2 is done until inbound/gateway is local.
+4. Treat Option 2 baseline as done only when config, outbound, daemon, probe, inbound, and gateway are all local.

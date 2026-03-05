@@ -1,7 +1,9 @@
 import {
   DEFAULT_ACCOUNT_ID,
   DmConfigSchema,
+  type DmPolicy,
   DmPolicySchema,
+  type GroupPolicy,
   GroupPolicySchema,
   MarkdownConfigSchema,
   ToolPolicySchema,
@@ -109,11 +111,11 @@ export type SignalAccountConfig = {
   ignoreAttachments?: boolean;
   ignoreStories?: boolean;
   sendReadReceipts?: boolean;
-  dmPolicy?: "open" | "pairing" | "allowlist";
+  dmPolicy?: DmPolicy;
   allowFrom?: Array<string | number>;
   defaultTo?: string;
   groupAllowFrom?: Array<string | number>;
-  groupPolicy?: "open" | "allowlist" | "disabled";
+  groupPolicy?: GroupPolicy;
   historyLimit?: number;
   dmHistoryLimit?: number;
   dms?: Record<string, unknown>;

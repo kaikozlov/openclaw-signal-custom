@@ -27,13 +27,14 @@ Done now:
 - plugin-local outbound sends, mentions, silent sends, reactions, stickers, edits, deletes
 - plugin-local directory, groups, and group-management actions
 - plugin-local retry and TCP socket transport
-- plugin-local daemon scaffolding and status probe
+- plugin-local daemon, status probe, monitor, and inbound event handling
+- plugin-local gateway startup wired to the local monitor
 
-Still not standalone:
+Still not fully hardened:
 
-- inbound monitor/provider lifecycle
-- runtime group-policy helper fallback
 - runtime fallback for unported message actions
+- generic runtime helper usage for media staging / markdown table mode
+- watchlist PRs not yet ported
 
 ## Workstreams
 
@@ -42,7 +43,7 @@ Still not standalone:
 | WS1 | Standalone identity/config/account surface | structural | Done |
 | WS2 | Outbound/action parity on `signal-custom` | #27104, #27107, #27108, #27145, #27146, #27148, #27149, #27169, #27171 | Done |
 | WS3 | RPC hardening + TCP transport on `signal-custom` | #27144, #27155 | Done |
-| WS4 | Standalone monitor/provider lifecycle | built-in Signal monitor stack | Next |
+| WS4 | Standalone monitor/provider lifecycle | built-in Signal monitor stack | Done |
 | WS5 | Inbound hardening + external Signal PR watchlist | #34546, #28417, #31232, #32026, #33851, #34177, others | Pending |
 
 ## Your PR Matrix
@@ -66,25 +67,24 @@ Still not standalone:
 
 - `src/channel.ts`
   - fallback `getSignalRuntime().channel.signal.messageActions`
-  - `getSignalRuntime().channel.groups.resolveRequireMention`
-  - `getSignalRuntime().channel.groups.resolveGroupPolicy`
-  - `getSignalRuntime().channel.signal.monitorSignalProvider`
 - `src/signal/send.ts`
   - `channel.media.saveMediaBuffer`
   - `channel.text.resolveMarkdownTableMode`
+- `src/signal/monitor.ts`
+  - generic runtime text/media helpers used for chunking + inbound media storage
+- `src/signal/monitor/event-handler.ts`
+  - generic runtime reply/routing/session/pairing helpers
 
-The first three are the real blockers for full Option 2 parity. The last two are generic runtime utilities and are acceptable unless they become unstable.
+These are generic host utility seams, not built-in `signal` ownership seams. The plugin now owns the channel-specific config, outbound, daemon, probe, inbound, and gateway flow.
 
 ## Next Copy Set
 
-Copy/adapt from upstream core into this repo:
+Focus after the standalone baseline:
 
-1. `src/signal/monitor.ts`
-2. `src/signal/monitor/access-policy.ts`
-3. `src/signal/monitor/event-handler.ts`
-4. `src/signal/monitor/event-handler.types.ts`
-5. `src/signal/monitor/mentions.ts`
-6. any direct helper deps that are not exported through `openclaw/plugin-sdk`
+1. port probe reliability fixes (`#33851`, `#34177`)
+2. port inbound edge-case fixes (`#34546`, `#28417`, `#31232`, `#32026`)
+3. review guard/failure hardening PRs
+4. decide whether to replace the remaining message-action fallback or leave it as a compatibility seam
 
 ## Hard Rule
 

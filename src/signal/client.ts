@@ -413,6 +413,85 @@ export async function signalCheck(
   }
 }
 
+export async function streamSignalEvents(params: {
+  baseUrl: string;
+  account?: string;
+  abortSignal?: AbortSignal;
+  onEvent: (event: SignalSseEvent) => void;
+}): Promise<void> {
+  const baseUrl = normalizeBaseUrl(params.baseUrl);
+  const url = new URL(`${baseUrl}/api/v1/events`);
+  if (params.account) {
+    url.searchParams.set("account", params.account);
+  }
+
+  const res = await fetch(url, {
+    method: "GET",
+    headers: { Accept: "text/event-stream" },
+    signal: params.abortSignal,
+  });
+  if (!res.ok || !res.body) {
+    throw new SignalHttpError(res.status, res.statusText || undefined);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let currentEvent: SignalSseEvent = {};
+
+  const flushEvent = () => {
+    if (!currentEvent.data && !currentEvent.event && !currentEvent.id) {
+      return;
+    }
+    params.onEvent({
+      event: currentEvent.event,
+      data: currentEvent.data,
+      id: currentEvent.id,
+    });
+    currentEvent = {};
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    let lineEnd = buffer.indexOf("\n");
+    while (lineEnd !== -1) {
+      let line = buffer.slice(0, lineEnd);
+      buffer = buffer.slice(lineEnd + 1);
+      if (line.endsWith("\r")) {
+        line = line.slice(0, -1);
+      }
+
+      if (line === "") {
+        flushEvent();
+        lineEnd = buffer.indexOf("\n");
+        continue;
+      }
+      if (line.startsWith(":")) {
+        lineEnd = buffer.indexOf("\n");
+        continue;
+      }
+      const [rawField, ...rest] = line.split(":");
+      const field = rawField.trim();
+      const rawValue = rest.join(":");
+      const value = rawValue.startsWith(" ") ? rawValue.slice(1) : rawValue;
+      if (field === "event") {
+        currentEvent.event = value;
+      } else if (field === "data") {
+        currentEvent.data = currentEvent.data ? `${currentEvent.data}\n${value}` : value;
+      } else if (field === "id") {
+        currentEvent.id = value;
+      }
+      lineEnd = buffer.indexOf("\n");
+    }
+  }
+
+  flushEvent();
+}
+
 export async function signalRpcRequestWithRetry<T = unknown>(
   method: string,
   params: Record<string, unknown> | undefined,
