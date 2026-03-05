@@ -1,53 +1,53 @@
 # Signal Custom Plugin Task List
 
-This is the execution checklist. We keep it updated as we land each slice.
+## Phase 0: Repo Foundation
 
-## Phase 0: Foundation
-
-- [x] Create migration reference map (`MIGRATION_MAP.md`)
+- [x] Create migration plan docs
 - [x] Wire CI (`typecheck` + `vitest`)
-- [x] Add upstream sync + divergence tracking (`sync-upstream.sh`, `sync-status.sh`)
+- [x] Add upstream sync tracking
 
-## Phase 1: Quick Wins (plugin-local, low risk)
+## Phase 1: Standalone Channel Surface
 
-- [x] Port `#27104` blockStreaming capability declaration
-- [x] Port `#27108` mention strip pattern (`U+FFFC`)
-- [x] Port `#27169` silent send plumbing (`silent` passthrough in outbound adapter)
-- [x] Port `#27107` groups dock adapter behavior where possible at plugin boundary
+- [x] Change plugin channel id to `signal-custom`
+- [x] Change manifest channel list to `signal-custom`
+- [x] Add plugin-local Signal config schema
+- [x] Add plugin-local Signal account resolver
+- [x] Move plugin config root to `channels.signal-custom`
+- [x] Add plugin-local onboarding/setup for `signal-custom`
+- [x] Keep legacy `signal:` target prefixes accepted for compatibility
 
-## Phase 2: WS1 Outbound/Action Parity
+## Phase 2: Port Existing PR Stack
 
-- [x] Port `#27149` reaction hardening
-- [x] Port `#27148` outbound native mentions
-- [x] Port `#27146` stickers + sticker search
-- [x] Port outbound subset of `#27145` edit/delete support
-- [x] Move default outbound send path off runtime `sendMessageSignal`
-- [x] Add coverage for default TCP outbound path and local markdown/media send behavior
+- [x] Port outbound/actions slices from your 12 PRs
+- [x] Port retry/backoff
+- [x] Port TCP socket transport
+- [x] Port directory/group lookup
+- [x] Port group-management actions
+- [x] Add tests proving `channels.signal-custom` drives the plugin
 
-## Phase 3: WS2 RPC + Transport
+## Phase 3: Finish Option 2
 
-- [x] Port `#27144` typed RPC errors + retry/backoff
-- [ ] Port probe reliability improvements (`#33851`, `#34177`)
-- [x] Port `#27155` TCP socket transport
+- [ ] Copy local `daemon.ts`
+- [ ] Copy local `probe.ts`
+- [ ] Copy local `monitor.ts`
+- [ ] Copy local `monitor/access-policy.ts`
+- [ ] Copy local `monitor/event-handler.ts`
+- [ ] Copy local `monitor/event-handler.types.ts`
+- [ ] Copy local `monitor/mentions.ts`
+- [ ] Replace hard-coded built-in `signal` inbound metadata with `signal-custom`
+- [ ] Swap `gateway.startAccount` to local monitor
+- [ ] Swap `status.probeAccount` to local probe
 
-## Phase 4: WS3 Directory + Group Actions
+## Phase 4: Hardening After Standalone Inbound Lands
 
-- [x] Port `#27147` directory/group lookup modules
-- [x] Port `#27171` group management + member info actions
+- [ ] Port probe reliability fixes (`#33851`, `#34177`)
+- [ ] Port inbound edge-case fixes (`#34546`, `#28417`, `#31232`, `#32026`)
+- [ ] Port defensive guard fixes (`#35931`, `#35600`, `#35490`)
+- [ ] Review pairing/allowlist isolation fixes (`#26029`, `#26617`, `#26639`)
 
-## Phase 5: Security + Hardening
+## Rules
 
-- [ ] Port allowlist/pairing isolation set (`#26029`, `#26617`, `#26639`)
-- [ ] Port defensive guards (`#35931`, `#35600`, `#35490`)
-- [ ] Port inbound envelope edge-case fixes (`#34546`, `#28417`, `#31232`, `#32026`)
-
-## Phase 6: Decide Scope Ceiling
-
-- [ ] Decide whether to port large inbound parity sets (`#15956`, `#15994`, `#16085`, `#16704`)
-
-## Working Rules
-
-1. Small slices only (one feature/fix cluster per commit).
-2. Run `npm run check` for every slice before commit.
-3. After each upstream sync, regenerate `SYNC_STATUS.md`.
-4. Update this file and `MIGRATION_MAP.md` on every landed slice.
+1. Copy first, shim second, rewrite last.
+2. Keep `npm run check` green after every slice.
+3. Update this file and `MIGRATION_MAP.md` whenever the boundary changes.
+4. Do not claim Option 2 is done until inbound/gateway is local.

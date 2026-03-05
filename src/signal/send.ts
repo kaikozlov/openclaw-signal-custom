@@ -1,5 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { loadOutboundMediaFromUrl, resolveSignalAccount } from "openclaw/plugin-sdk";
+import { loadOutboundMediaFromUrl, type OpenClawConfig } from "openclaw/plugin-sdk";
+import { SIGNAL_CHANNEL_ID, stripSignalChannelPrefix } from "../constants.js";
+import { resolveSignalAccount } from "../config.js";
 import { getSignalRuntime } from "../runtime.js";
 import { signalRpcRequestWithRetry } from "./client.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
@@ -39,13 +40,9 @@ type SignalTarget =
   | { type: "username"; username: string };
 
 function parseTarget(raw: string): SignalTarget {
-  let value = raw.trim();
+  let value = stripSignalChannelPrefix(raw);
   if (!value) {
     throw new Error("Signal recipient is required");
-  }
-  const lower = value.toLowerCase();
-  if (lower.startsWith("signal:")) {
-    value = value.slice("signal:".length).trim();
   }
   const normalized = value.toLowerCase();
   if (normalized.startsWith("group:")) {
@@ -101,22 +98,18 @@ function buildTargetParams(
 }
 
 function normalizeSignalMentionRecipient(raw: string, index: number): string {
-  const trimmed = raw.trim();
+  const trimmed = stripSignalChannelPrefix(raw);
   if (!trimmed) {
     throw new Error(`Signal mention ${index} recipient is required`);
   }
-  const withoutSignal = trimmed.replace(/^signal:/i, "").trim();
-  if (!withoutSignal) {
-    throw new Error(`Signal mention ${index} recipient is required`);
-  }
-  if (withoutSignal.toLowerCase().startsWith("uuid:")) {
-    const uuid = withoutSignal.slice("uuid:".length).trim();
+  if (trimmed.toLowerCase().startsWith("uuid:")) {
+    const uuid = trimmed.slice("uuid:".length).trim();
     if (!uuid) {
       throw new Error(`Signal mention ${index} recipient is required`);
     }
     return uuid;
   }
-  return withoutSignal;
+  return trimmed;
 }
 
 function buildSignalMentionParams(mentions?: SignalMentionRange[]): string[] {
@@ -195,7 +188,7 @@ export async function sendMessageSignal(
     } else {
       const tableMode = getSignalRuntime().channel.text.resolveMarkdownTableMode({
         cfg,
-        channel: "signal",
+        channel: SIGNAL_CHANNEL_ID,
         accountId: accountInfo.accountId,
       });
       const formatted = markdownToSignalText(message, { tableMode });

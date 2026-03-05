@@ -1,136 +1,94 @@
 # Signal Plugin Migration Map
 
-This is the living plan for moving Signal improvements into the standalone plugin repo with the least rewrite possible.
+This is the living plan for turning the copied Signal work into a true standalone `signal-custom` channel that runs on stock OpenClaw releases.
 
 ## Goal
 
-Make `openclaw-signal-custom` the source of truth for Signal behavior while staying easy to sync with upstream OpenClaw.
+Make `openclaw-signal-custom` usable without patching upstream core:
 
-## Core Strategy (Copy-Mostly)
+- plugin id: `signal-custom`
+- channel id: `signal-custom`
+- config root: `channels.signal-custom`
 
-1. Copy Signal logic modules into this plugin repo first.
-2. Add thin adapters for missing internals (`compat` layer) only where needed.
-3. Keep rewrites limited to:
-   - import path changes
-   - config/runtime plumbing changes
-   - plugin registration/wiring
-4. Avoid changing behavior during migration; do behavior changes in follow-up commits.
+## Strategy
+
+1. Copy existing Signal logic first.
+2. Keep behavior aligned with your PRs.
+3. Only rewrite seams that were hard-coded to the built-in `signal` channel.
+4. Track every remaining runtime dependency explicitly.
 
 ## Current Baseline
 
-- Plugin repo: `openclaw-signal-custom`
-- Branches:
-  - `upstream-signal` = upstream snapshot branch
-  - `main` = custom branch
-- CI: typecheck + tests wired on `main`
+Done now:
 
-## What Must Stay in Plugin Surface
+- standalone channel id and manifest wiring (`signal-custom`)
+- plugin-local Signal schema and account resolver
+- plugin-local onboarding/setup for `channels.signal-custom`
+- plugin-local outbound sends, mentions, silent sends, reactions, stickers, edits, deletes
+- plugin-local directory, groups, and group-management actions
+- plugin-local retry and TCP socket transport
 
-- Channel adapter (`src/channel.ts`)
-- Runtime bridge (`src/runtime.ts`)
-- Plugin manifest and metadata (`index.ts`, `openclaw.plugin.json`, `package.json`)
-- Signal action/capability wiring exposed through plugin APIs
+Still not standalone:
+
+- inbound monitor/provider lifecycle
+- provider probe
+- runtime group-policy helper fallback
+- runtime fallback for unported message actions
 
 ## Workstreams
 
-| Workstream | Scope | Source PRs | Rewrite Level | Status |
-|---|---|---|---|---|
-| WS1 | Outbound + reactions + mentions + silent send | #27149, #27169, #27148, #27146, #27145 (outbound parts) | Low | Done |
-| WS2 | RPC client + probe + transport | #27144, #27155; plus external #33851/#34177 | Medium | In progress |
-| WS3 | Directory + groups + group-management actions | #27147, #27171 | Medium | Done |
-| WS4 | Monitor/inbound pipeline parity (larger core coupling) | external #15956, #15994, #31232, #32026, #34546, #28417 | High | Backlog |
-| WS5 | Security/pairing/group allowlist hardening | external #26029, #26617, #26639, #29154/#25543 | Medium | Planned |
+| Workstream | Scope | Source PRs | Status |
+|---|---|---|---|
+| WS1 | Standalone identity/config/account surface | structural | Done |
+| WS2 | Outbound/action parity on `signal-custom` | #27104, #27107, #27108, #27145, #27146, #27148, #27149, #27169, #27171 | Done |
+| WS3 | RPC hardening + TCP transport on `signal-custom` | #27144, #27155 | Done |
+| WS4 | Standalone daemon/probe/monitor stack | built-in Signal monitor stack | Next |
+| WS5 | Inbound hardening + external Signal PR watchlist | #34546, #28417, #31232, #32026, #33851, #34177, others | Pending |
 
-## Your PR Port Matrix
+## Your PR Matrix
 
-| PR | Title (short) | Primary target in plugin repo | Expected rewrite | Status |
-|---|---|---|---|---|
-| #27104 | declare `blockStreaming` capability | `src/channel.ts` | Very low | Done |
-| #27107 | groups dock adapter | `src/channel.ts` + helper module | Low | Done |
-| #27108 | mention strip patterns | `src/channel.ts` | Very low | Done |
-| #27144 | typed RPC errors + retry/backoff | `src/signal/client.ts` (plugin-local copy) | Medium | Done |
-| #27145 | outbound edit/delete | `src/signal/send.ts` + actions wiring | Medium | Done |
-| #27146 | outbound stickers + search | `src/signal/send.ts` + action wiring | Medium | Done |
-| #27147 | directory/group lookup RPC + adapter | `src/signal/directory.ts`, `src/signal/groups.ts`, `src/channel.ts` | Medium | Done |
-| #27148 | outbound native mentions | `src/signal/send.ts` | Low | Done |
-| #27149 | reaction hardening | `src/channel.ts` action prevalidation/normalization + local send-reactions parity | Low | Done |
-| #27155 | persistent TCP socket transport | `src/signal/socket-client.ts`, `src/signal/client.ts`, `src/signal/send.ts`, `src/channel.ts` | Medium/High | Done |
-| #27169 | silent sends (`noUrgent`) | `src/channel.ts`, `src/signal/send.ts` | Very low | Done |
-| #27171 | group management/member info actions | action + groups/directory modules | Medium | Done |
+| PR | Scope | Status in plugin repo |
+|---|---|---|
+| #27104 | blockStreaming capability | Done |
+| #27107 | group-policy adapter behavior | Done on plugin surface |
+| #27108 | mention strip patterns | Done |
+| #27144 | typed RPC errors + retry/backoff | Done |
+| #27145 | outbound edit/delete | Done |
+| #27146 | stickers + sticker search | Done |
+| #27147 | directory/group lookup | Done |
+| #27148 | outbound native mentions | Done |
+| #27149 | reaction hardening | Done |
+| #27155 | TCP socket transport | Done for plugin-local RPC and default outbound |
+| #27169 | silent sends (`noUrgent`) | Done |
+| #27171 | group-management actions | Done |
 
-## External Signal PR Watchlist (Import Candidates)
+## Remaining Runtime Seams
 
-### High-value reliability/safety (small-medium first)
+- `src/channel.ts`
+  - fallback `getSignalRuntime().channel.signal.messageActions`
+  - `getSignalRuntime().channel.groups.resolveRequireMention`
+  - `getSignalRuntime().channel.groups.resolveGroupPolicy`
+  - `getSignalRuntime().channel.signal.probeSignal`
+  - `getSignalRuntime().channel.signal.monitorSignalProvider`
+- `src/signal/send.ts`
+  - `channel.media.saveMediaBuffer`
+  - `channel.text.resolveMarkdownTableMode`
 
-- #35931 guard unsafe `URL`/`Buffer` inputs
-- #35600 catch unhandled async promise chains
-- #35490 defensive string guards in monitor/reactions
-- #34546 accept `syncMessage: null` envelopes
-- #28417 keep valid group `dataMessage` when `syncMessage` also exists
-- #33851 / #34177 probe fallback and RPC-first probing
-- #31232 ignore system messages (expiration/group permission noise)
-- #32026 drop bare emoji reaction envelopes before dispatch
+The first four are the real blockers for full Option 2 parity. The last two are generic runtime utilities and are acceptable unless they become unstable.
 
-### Security hardening cluster
+## Next Copy Set
 
-- #26029 isolate group allowlist from pairing-store entries
-- #26617 keep DM pairing-store entries out of group allowlists
-- #26639 scope pairing approvals to `accountId`
+Copy/adapt from upstream core into this repo:
 
-### Large feature sets (mine selectively after core slices)
+1. `src/signal/daemon.ts`
+2. `src/signal/probe.ts`
+3. `src/signal/monitor.ts`
+4. `src/signal/monitor/access-policy.ts`
+5. `src/signal/monitor/event-handler.ts`
+6. `src/signal/monitor/event-handler.types.ts`
+7. `src/signal/monitor/mentions.ts`
+8. any direct helper deps that are not exported through `openclaw/plugin-sdk`
 
-- #15956 enhanced inbound message handling
-- #15994 unsend + poll actions
-- #16085 container REST support
-- #16704 REST lock contention/perf changes
+## Hard Rule
 
-## Boundaries: When We Copy vs Rewrite
-
-Copy as-is when:
-
-- Logic is self-contained under Signal modules and uses stable SDK/runtime hooks.
-
-Adapter rewrite only when:
-
-- Module depends on non-exported OpenClaw internals.
-- Module assumes core config schema files owned by the main repo.
-- Module assumes runtime registration points outside plugin seams.
-
-## Execution Loop (for every slice)
-
-1. Pick one slice from WS1/WS2/WS3.
-2. Copy source module(s) from the corresponding PR branch or upstream file.
-3. Patch imports/config/runtime wiring minimally.
-4. Run plugin checks (`npm run check`).
-5. Update this file:
-   - mark row status
-   - note blockers
-   - link commit/PR.
-
-## Sync Tracking
-
-- Run `./scripts/sync-upstream.sh` to refresh `upstream-signal`.
-- The sync script now also updates `SYNC_STATUS.md`.
-- `SYNC_STATUS.md` is the canonical quick diff between `main` and `upstream-signal`:
-  - commit divergence
-  - file-level divergence
-
-## Tracking Checklist
-
-- [x] WS1 outbound/actions slice merged
-- [ ] WS2 RPC/probe slice merged
-- [x] WS3 directory/groups slice merged
-- [ ] WS5 security hardening slice merged
-- [ ] Decide whether WS4 full inbound parity is needed
-
-## Notes
-
-- Outbound routing now uses the plugin-local sender by default for `sendText`, `sendMedia`, `sendPayload`, and pairing approval notifications.
-- TCP transport is now exercised on the default outbound path, not only on helper RPC modules.
-- Remaining runtime seams are intentional and currently limited to:
-  - fallback `messageActions` support for unported/future actions
-  - group policy / require-mention resolution
-  - inbound monitor and provider probe hooks
-  - text table-mode resolution and attachment staging helpers used by the local sender
-- Target outcome is not “zero fork forever”; it is “small, stable plugin-owned fork with predictable upstream sync.”
-- Prefer small incremental merges over one large parity dump.
+Do not write new Signal behavior when copied logic or a thin compatibility shim will do. The plugin should stay structurally close to upstream Signal so reintegration stays possible.

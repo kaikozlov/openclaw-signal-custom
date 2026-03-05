@@ -39,7 +39,7 @@ describe("signal edit/delete actions", () => {
 
     const cfg = {
       channels: {
-        signal: {
+        "signal-custom": {
           account: "+15550001111",
           httpUrl: "http://signal.local",
         },
@@ -80,7 +80,7 @@ describe("signal edit/delete actions", () => {
 
     const cfg = {
       channels: {
-        signal: {
+        "signal-custom": {
           account: "+15550001111",
           httpUrl: "http://signal.local",
         },
@@ -120,7 +120,7 @@ describe("signal edit/delete actions", () => {
 
     const cfg = {
       channels: {
-        signal: {
+        "signal-custom": {
           account: "+15550001111",
           httpUrl: "http://signal.local",
         },
@@ -165,7 +165,7 @@ describe("signal edit/delete actions", () => {
 
     const cfg = {
       channels: {
-        signal: {
+        "signal-custom": {
           account: "+15550001111",
           httpUrl: "http://signal.local",
         },

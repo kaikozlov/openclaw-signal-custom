@@ -10,33 +10,34 @@ import {
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   formatPairingApproveHint,
-  getChatChannelMeta,
   jsonResult,
-  listSignalAccountIds,
-  looksLikeSignalTargetId,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   normalizeE164,
-  normalizeSignalMessagingTarget,
   PAIRING_APPROVED_MESSAGE,
   readNumberParam,
   resolveChannelMediaMaxBytes,
-  resolveDefaultSignalAccountId,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
-  resolveSignalAccount,
   readStringParam,
   setAccountEnabledInConfigSection,
-  signalOnboardingAdapter,
-  SignalConfigSchema,
   type ChannelGroupContext,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
   type GroupToolPolicyBySenderConfig,
   type GroupToolPolicyConfig,
   type ReplyPayload,
-  type ResolvedSignalAccount,
 } from "openclaw/plugin-sdk";
+import {
+  getSignalConfig,
+  listSignalAccountIds,
+  resolveDefaultSignalAccountId,
+  resolveSignalAccount,
+  SignalConfigSchema,
+  type ResolvedSignalAccount,
+} from "./config.js";
+import { SIGNAL_CHANNEL_ID, SIGNAL_META, stripSignalChannelPrefix } from "./constants.js";
+import { signalOnboardingAdapter } from "./onboarding.js";
 import { getSignalRuntime } from "./runtime.js";
 import {
   markdownToSignalTextChunks,
@@ -63,6 +64,10 @@ import {
   removeGroupMemberSignal,
   updateGroupSignal,
 } from "./signal/groups.js";
+import {
+  looksLikeSignalCustomTargetId,
+  normalizeSignalCustomMessagingTarget,
+} from "./targets.js";
 
 type ReactionToolContext = {
   currentMessageId?: string | number;
@@ -356,7 +361,7 @@ const signalMessageActions: ChannelMessageActionAdapter = {
   },
 };
 
-const meta = getChatChannelMeta("signal");
+const meta = SIGNAL_META;
 
 type SenderScopedToolsEntry = {
   tools?: GroupToolPolicyConfig;
@@ -394,22 +399,18 @@ function createSignalActionGate(actions: SignalActionConfig | undefined) {
 }
 
 function normalizeSignalMentionRecipient(raw: string, index: number): string {
-  const trimmed = raw.trim();
+  const trimmed = stripSignalChannelPrefix(raw);
   if (!trimmed) {
     throw new Error(`Signal mention ${index} recipient is required`);
   }
-  const withoutSignal = trimmed.replace(/^signal:/i, "").trim();
-  if (!withoutSignal) {
-    throw new Error(`Signal mention ${index} recipient is required`);
-  }
-  if (withoutSignal.toLowerCase().startsWith("uuid:")) {
-    const uuid = withoutSignal.slice("uuid:".length).trim();
+  if (trimmed.toLowerCase().startsWith("uuid:")) {
+    const uuid = trimmed.slice("uuid:".length).trim();
     if (!uuid) {
       throw new Error(`Signal mention ${index} recipient is required`);
     }
     return uuid;
   }
-  return withoutSignal;
+  return trimmed;
 }
 
 function parseSignalMentionRanges(rawMentions: unknown): SignalMentionRange[] | undefined {
@@ -442,7 +443,7 @@ function resolveSignalPayloadMentions(payload: ReplyPayload): SignalMentionRange
   if (!isRecord(payload.channelData)) {
     return undefined;
   }
-  const signalData = payload.channelData.signal;
+  const signalData = payload.channelData[SIGNAL_CHANNEL_ID] ?? payload.channelData.signal;
   if (!isRecord(signalData)) {
     return undefined;
   }
@@ -451,34 +452,26 @@ function resolveSignalPayloadMentions(payload: ReplyPayload): SignalMentionRange
 }
 
 function normalizeSignalReactionAuthor(raw: string): string {
-  const trimmed = raw.trim();
+  const trimmed = stripSignalChannelPrefix(raw);
   if (!trimmed) {
     return "";
   }
-  const withoutSignal = trimmed.replace(/^signal:/i, "").trim();
-  if (!withoutSignal) {
-    return "";
+  if (trimmed.toLowerCase().startsWith("uuid:")) {
+    return trimmed.slice("uuid:".length).trim();
   }
-  if (withoutSignal.toLowerCase().startsWith("uuid:")) {
-    return withoutSignal.slice("uuid:".length).trim();
-  }
-  return withoutSignal;
+  return trimmed;
 }
 
 function resolveSignalReactionTarget(raw: string): { recipient?: string; groupId?: string } {
-  const trimmed = raw.trim();
+  const trimmed = stripSignalChannelPrefix(raw);
   if (!trimmed) {
     return {};
   }
-  const withoutSignal = trimmed.replace(/^signal:/i, "").trim();
-  if (!withoutSignal) {
-    return {};
-  }
-  if (withoutSignal.toLowerCase().startsWith("group:")) {
-    const groupId = withoutSignal.slice("group:".length).trim();
+  if (trimmed.toLowerCase().startsWith("group:")) {
+    const groupId = trimmed.slice("group:".length).trim();
     return groupId ? { groupId } : {};
   }
-  const recipient = normalizeSignalReactionAuthor(withoutSignal);
+  const recipient = normalizeSignalReactionAuthor(trimmed);
   return recipient ? { recipient } : {};
 }
 
@@ -550,7 +543,7 @@ function readSignalGroupIdParam(params: Record<string, unknown>): string {
   if (!trimmed) {
     throw new Error("Signal group management requires groupId.");
   }
-  return trimmed.replace(/^signal:group:/i, "").replace(/^group:/i, "").trim();
+  return stripSignalChannelPrefix(trimmed).replace(/^group:/i, "").trim();
 }
 
 function parseSignalMessageTimestamp(raw: string): number {
@@ -726,10 +719,11 @@ async function sendSignalOutbound(params: {
   deps?: { sendSignal?: SignalSendFn };
 }) {
   const send = params.deps?.sendSignal ?? sendMessageSignal;
+  const channelConfig = getSignalConfig(params.cfg);
   const maxBytes = resolveChannelMediaMaxBytes({
     cfg: params.cfg,
     resolveChannelLimitMb: ({ cfg, accountId }) =>
-      cfg.channels?.signal?.accounts?.[accountId]?.mediaMaxMb ?? cfg.channels?.signal?.mediaMaxMb,
+      channelConfig?.accounts?.[accountId]?.mediaMaxMb ?? channelConfig?.mediaMaxMb,
     accountId: params.accountId,
   });
   const sendOpts: SignalSendOptsCompat = {
@@ -768,7 +762,7 @@ async function sendSignalPayloadOutbound(params: {
   const mentions = resolveSignalPayloadMentions(params.payload);
 
   if (!text && mediaUrls.length === 0) {
-    return { channel: "signal" as const, messageId: "" };
+    return { channel: SIGNAL_CHANNEL_ID, messageId: "" };
   }
 
   if (mediaUrls.length > 0) {
@@ -795,7 +789,7 @@ async function sendSignalPayloadOutbound(params: {
         deps: params.deps,
       });
     }
-    return { channel: "signal" as const, ...lastResult };
+    return { channel: SIGNAL_CHANNEL_ID, ...lastResult };
   }
 
   const chunkLimit = 4000;
@@ -811,11 +805,11 @@ async function sendSignalPayloadOutbound(params: {
       mentions,
       deps: params.deps,
     });
-    return { channel: "signal" as const, ...result };
+    return { channel: SIGNAL_CHANNEL_ID, ...result };
   }
   const tableMode = getSignalRuntime().channel.text.resolveMarkdownTableMode({
     cfg: params.cfg,
-    channel: "signal",
+    channel: SIGNAL_CHANNEL_ID,
     accountId: params.accountId ?? undefined,
   });
   const chunks = markdownToSignalTextChunks(text, chunkLimit, { tableMode });
@@ -832,18 +826,18 @@ async function sendSignalPayloadOutbound(params: {
       deps: params.deps,
     });
   }
-  return { channel: "signal" as const, ...lastResult };
+  return { channel: SIGNAL_CHANNEL_ID, ...lastResult };
 }
 
 export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
-  id: "signal",
+  id: SIGNAL_CHANNEL_ID,
   meta: {
     ...meta,
   },
   onboarding: signalOnboardingAdapter,
   pairing: {
     idLabel: "signalNumber",
-    normalizeAllowEntry: (entry) => entry.replace(/^signal:/i, ""),
+    normalizeAllowEntry: (entry) => stripSignalChannelPrefix(entry),
     notifyApproval: async ({ cfg, id }) => {
       await sendMessageSignal(id, PAIRING_APPROVED_MESSAGE, { cfg });
     },
@@ -853,6 +847,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     media: true,
     reactions: true,
     edit: true,
+    groupManagement: true,
     blockStreaming: true,
   },
   actions: signalMessageActions,
@@ -862,7 +857,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   mentions: {
     stripPatterns: () => ["\uFFFC"],
   },
-  reload: { configPrefixes: ["channels.signal"] },
+  reload: { configPrefixes: [`channels.${SIGNAL_CHANNEL_ID}`] },
   configSchema: buildChannelConfigSchema(SignalConfigSchema),
   config: {
     listAccountIds: (cfg) => listSignalAccountIds(cfg),
@@ -871,7 +866,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     setAccountEnabled: ({ cfg, accountId, enabled }) =>
       setAccountEnabledInConfigSection({
         cfg,
-        sectionKey: "signal",
+        sectionKey: SIGNAL_CHANNEL_ID,
         accountId,
         enabled,
         allowTopLevel: true,
@@ -879,7 +874,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     deleteAccount: ({ cfg, accountId }) =>
       deleteAccountFromConfigSection({
         cfg,
-        sectionKey: "signal",
+        sectionKey: SIGNAL_CHANNEL_ID,
         accountId,
         clearBaseFields: ["account", "httpUrl", "httpHost", "httpPort", "cliPath", "name"],
       }),
@@ -899,7 +894,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       allowFrom
         .map((entry) => String(entry).trim())
         .filter(Boolean)
-        .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
+        .map((entry) => (entry === "*" ? "*" : normalizeE164(stripSignalChannelPrefix(entry))))
         .filter(Boolean),
     resolveDefaultTo: ({ cfg, accountId }) =>
       resolveSignalAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
@@ -907,23 +902,23 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
       const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccountPath = Boolean(cfg.channels?.signal?.accounts?.[resolvedAccountId]);
+      const useAccountPath = Boolean(getSignalConfig(cfg)?.accounts?.[resolvedAccountId]);
       const basePath = useAccountPath
-        ? `channels.signal.accounts.${resolvedAccountId}.`
-        : "channels.signal.";
+        ? `channels.${SIGNAL_CHANNEL_ID}.accounts.${resolvedAccountId}.`
+        : `channels.${SIGNAL_CHANNEL_ID}.`;
       return {
         policy: account.config.dmPolicy ?? "pairing",
         allowFrom: account.config.allowFrom ?? [],
         policyPath: `${basePath}dmPolicy`,
         allowFromPath: basePath,
-        approveHint: formatPairingApproveHint("signal"),
-        normalizeEntry: (raw) => normalizeE164(raw.replace(/^signal:/i, "").trim()),
+        approveHint: formatPairingApproveHint(SIGNAL_CHANNEL_ID),
+        normalizeEntry: (raw) => normalizeE164(stripSignalChannelPrefix(raw)),
       };
     },
     collectWarnings: ({ account, cfg }) => {
       const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
       const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
-        providerConfigPresent: cfg.channels?.signal !== undefined,
+        providerConfigPresent: getSignalConfig(cfg) !== undefined,
         groupPolicy: account.config.groupPolicy,
         defaultGroupPolicy,
       });
@@ -931,7 +926,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         return [];
       }
       return [
-        `- Signal groups: groupPolicy="open" allows any member to trigger the bot. Set channels.signal.groupPolicy="allowlist" + channels.signal.groupAllowFrom to restrict senders.`,
+        `- Signal groups: groupPolicy="open" allows any member to trigger the bot. Set channels.${SIGNAL_CHANNEL_ID}.groupPolicy="allowlist" + channels.${SIGNAL_CHANNEL_ID}.groupAllowFrom to restrict senders.`,
       ];
     },
   },
@@ -939,14 +934,14 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     resolveRequireMention: (params) =>
       getSignalRuntime().channel.groups.resolveRequireMention({
         cfg: params.cfg,
-        channel: "signal",
+        channel: SIGNAL_CHANNEL_ID,
         groupId: params.groupId,
         accountId: params.accountId ?? undefined,
       }),
     resolveToolPolicy: (params) => {
       const policy = getSignalRuntime().channel.groups.resolveGroupPolicy({
         cfg: params.cfg,
-        channel: "signal",
+        channel: SIGNAL_CHANNEL_ID,
         groupId: params.groupId,
         accountId: params.accountId ?? undefined,
       });
@@ -958,10 +953,10 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     },
   },
   messaging: {
-    normalizeTarget: normalizeSignalMessagingTarget,
+    normalizeTarget: normalizeSignalCustomMessagingTarget,
     targetResolver: {
-      looksLikeId: looksLikeSignalTargetId,
-      hint: "<E.164|uuid:ID|group:ID|signal:group:ID|signal:+E.164>",
+      looksLikeId: looksLikeSignalCustomTargetId,
+      hint: "<E.164|uuid:ID|group:ID|signal-custom:group:ID|signal-custom:+E.164>",
     },
   },
   directory: {
@@ -1044,7 +1039,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     applyAccountName: ({ cfg, accountId, name }) =>
       applyAccountNameToChannelSection({
         cfg,
-        channelKey: "signal",
+        channelKey: SIGNAL_CHANNEL_ID,
         accountId,
         name,
       }),
@@ -1063,7 +1058,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     applyAccountConfig: ({ cfg, accountId, input }) => {
       const namedConfig = applyAccountNameToChannelSection({
         cfg,
-        channelKey: "signal",
+        channelKey: SIGNAL_CHANNEL_ID,
         accountId,
         name: input.name,
       });
@@ -1071,7 +1066,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         accountId !== DEFAULT_ACCOUNT_ID
           ? migrateBaseNameToDefaultAccount({
               cfg: namedConfig,
-              channelKey: "signal",
+              channelKey: SIGNAL_CHANNEL_ID,
             })
           : namedConfig;
       if (accountId === DEFAULT_ACCOUNT_ID) {
@@ -1079,8 +1074,8 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
           ...next,
           channels: {
             ...next.channels,
-            signal: {
-              ...next.channels?.signal,
+            [SIGNAL_CHANNEL_ID]: {
+              ...next.channels?.[SIGNAL_CHANNEL_ID],
               enabled: true,
               ...buildSignalSetupPatch(input),
             },
@@ -1091,13 +1086,13 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         ...next,
         channels: {
           ...next.channels,
-          signal: {
-            ...next.channels?.signal,
+          [SIGNAL_CHANNEL_ID]: {
+            ...next.channels?.[SIGNAL_CHANNEL_ID],
             enabled: true,
             accounts: {
-              ...next.channels?.signal?.accounts,
+              ...getSignalConfig(next)?.accounts,
               [accountId]: {
-                ...next.channels?.signal?.accounts?.[accountId],
+                ...getSignalConfig(next)?.accounts?.[accountId],
                 enabled: true,
                 ...buildSignalSetupPatch(input),
               },
@@ -1132,7 +1127,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         silent: silent ?? undefined,
         deps,
       });
-      return { channel: "signal", ...result };
+      return { channel: SIGNAL_CHANNEL_ID, ...result };
     },
     sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps, silent }) => {
       const result = await sendSignalOutbound({
@@ -1145,12 +1140,12 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         silent: silent ?? undefined,
         deps,
       });
-      return { channel: "signal", ...result };
+      return { channel: SIGNAL_CHANNEL_ID, ...result };
     },
   },
   status: {
     defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
-    collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("signal", accounts),
+    collectStatusIssues: (accounts) => collectStatusIssuesFromLastError(SIGNAL_CHANNEL_ID, accounts),
     buildChannelSummary: ({ snapshot }) => ({
       ...buildBaseChannelStatusSummary(snapshot),
       baseUrl: snapshot.baseUrl ?? null,

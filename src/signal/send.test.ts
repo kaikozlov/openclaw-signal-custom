@@ -55,7 +55,7 @@ describe("sendMessageSignal", () => {
     const result = await sendMessageSignal("+15550006666", "**hi** @kai", {
       cfg: {
         channels: {
-          signal: {
+          "signal-custom": {
             account: "+15559990000",
             httpUrl: "http://signal.local",
           },
@@ -114,7 +114,7 @@ describe("sendMessageSignal", () => {
       const result = await sendMessageSignal("+15550007777", "", {
         cfg: {
           channels: {
-            signal: {
+            "signal-custom": {
               account: "+15559990000",
               httpUrl: "http://signal.local",
             },

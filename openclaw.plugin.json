@@ -1,6 +1,6 @@
 {
   "id": "signal-custom",
-  "channels": ["signal"],
+  "channels": ["signal-custom"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

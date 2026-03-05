@@ -69,7 +69,7 @@ describe("signal outbound cfg threading", () => {
   it("threads provided cfg into sendText deps call", async () => {
     const cfg = {
       channels: {
-        signal: {
+        "signal-custom": {
           accounts: {
             work: {
               mediaMaxMb: 12,
@@ -94,13 +94,13 @@ describe("signal outbound cfg threading", () => {
       maxBytes: 12 * 1024 * 1024,
       accountId: "work",
     });
-    expect(result).toEqual({ channel: "signal", messageId: "sig-1" });
+    expect(result).toEqual({ channel: "signal-custom", messageId: "sig-1" });
   });
 
   it("threads cfg + mediaUrl into sendMedia deps call", async () => {
     const cfg = {
       channels: {
-        signal: {
+        "signal-custom": {
           mediaMaxMb: 7,
         },
       },
@@ -122,11 +122,11 @@ describe("signal outbound cfg threading", () => {
       maxBytes: 7 * 1024 * 1024,
       accountId: "default",
     });
-    expect(result).toEqual({ channel: "signal", messageId: "sig-2" });
+    expect(result).toEqual({ channel: "signal-custom", messageId: "sig-2" });
   });
 
   it("forwards silent flag in sendText when requested", async () => {
-    const cfg = { channels: { signal: {} } };
+    const cfg = { channels: { "signal-custom": {} } };
     const sendSignal = vi.fn(async () => ({ messageId: "sig-3" }));
 
     const result = await signalPlugin.outbound!.sendText!({
@@ -143,11 +143,11 @@ describe("signal outbound cfg threading", () => {
       accountId: undefined,
       silent: true,
     });
-    expect(result).toEqual({ channel: "signal", messageId: "sig-3" });
+    expect(result).toEqual({ channel: "signal-custom", messageId: "sig-3" });
   });
 
   it("forwards native Signal mentions from payload channelData", async () => {
-    const cfg = { channels: { signal: {} } };
+    const cfg = { channels: { "signal-custom": {} } };
     const sendSignal = vi.fn(async () => ({ messageId: "sig-4" }));
 
     const sendPayload = signalPlugin.outbound!.sendPayload;
@@ -162,7 +162,7 @@ describe("signal outbound cfg threading", () => {
       payload: {
         text: "hello @kai",
         channelData: {
-          signal: {
+          "signal-custom": {
             mentions: [{ start: 6, length: 4, recipient: "signal:uuid:abc-123" }],
           },
         },
@@ -176,11 +176,11 @@ describe("signal outbound cfg threading", () => {
       accountId: undefined,
       mentions: [{ start: 6, length: 4, recipient: "abc-123" }],
     });
-    expect(result).toEqual({ channel: "signal", messageId: "sig-4" });
+    expect(result).toEqual({ channel: "signal-custom", messageId: "sig-4" });
   });
 
   it("applies mentions only to the first media in payload batches", async () => {
-    const cfg = { channels: { signal: {} } };
+    const cfg = { channels: { "signal-custom": {} } };
     const sendSignal = vi
       .fn()
       .mockResolvedValueOnce({ messageId: "sig-1" })
@@ -199,7 +199,7 @@ describe("signal outbound cfg threading", () => {
         text: "hi",
         mediaUrls: ["https://example.com/a.jpg", "https://example.com/b.jpg"],
         channelData: {
-          signal: {
+          "signal-custom": {
             mentions: [{ start: 0, length: 2, recipient: "signal:+15550001111" }],
           },
         },
@@ -229,11 +229,11 @@ describe("signal outbound cfg threading", () => {
     );
     const secondCallOptions = sendSignal.mock.calls[1]?.[2] as { mentions?: unknown } | undefined;
     expect(secondCallOptions?.mentions).toBeUndefined();
-    expect(result).toEqual({ channel: "signal", messageId: "sig-2" });
+    expect(result).toEqual({ channel: "signal-custom", messageId: "sig-2" });
   });
 
   it("rejects invalid payload mention ranges", async () => {
-    const cfg = { channels: { signal: {} } };
+    const cfg = { channels: { "signal-custom": {} } };
     const sendSignal = vi.fn(async () => ({ messageId: "sig-5" }));
 
     const sendPayload = signalPlugin.outbound!.sendPayload;
@@ -249,7 +249,7 @@ describe("signal outbound cfg threading", () => {
         payload: {
           text: "bad",
           channelData: {
-            signal: {
+            "signal-custom": {
               mentions: [{ start: -1, length: 2, recipient: "signal:+15550001111" }],
             },
           },
@@ -263,7 +263,7 @@ describe("signal outbound cfg threading", () => {
   it("formats markdown payload text locally when mentions are absent", async () => {
     const cfg = {
       channels: {
-        signal: {
+        "signal-custom": {
           account: "+15559990000",
           httpUrl: "http://signal.local",
         },
@@ -305,7 +305,7 @@ describe("signal outbound cfg threading", () => {
         ],
       }),
     );
-    expect(result).toEqual({ channel: "signal", messageId: "sig-6" });
+    expect(result).toEqual({ channel: "signal-custom", messageId: "sig-6" });
   });
 
   it("uses the local sender over TCP for the default sendText path", async () => {
@@ -325,7 +325,7 @@ describe("signal outbound cfg threading", () => {
       const result = await signalPlugin.outbound!.sendText!({
         cfg: {
           channels: {
-            signal: {
+            "signal-custom": {
               account: "+15559990000",
               httpUrl: "http://signal.local",
               tcpHost: "127.0.0.1",
@@ -350,7 +350,7 @@ describe("signal outbound cfg threading", () => {
         },
       ]);
       expect(result).toEqual({
-        channel: "signal",
+        channel: "signal-custom",
         messageId: "1700000001000",
         timestamp: 1700000001000,
       });

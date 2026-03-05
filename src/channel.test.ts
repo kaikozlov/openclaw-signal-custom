@@ -44,11 +44,11 @@ describe("signalPlugin outbound sendMedia", () => {
       channel: {
         groups: {
           resolveRequireMention: (params: { cfg: any; groupId?: string | null }) =>
-            params.cfg.channels?.signal?.groups?.[params.groupId ?? ""]?.requireMention ?? true,
+            params.cfg.channels?.["signal-custom"]?.groups?.[params.groupId ?? ""]?.requireMention ?? true,
           resolveGroupPolicy: (params: { cfg: any; groupId?: string | null }) => ({
             allowlistEnabled: false,
             allowed: true,
-            groupConfig: params.cfg.channels?.signal?.groups?.[params.groupId ?? ""],
+            groupConfig: params.cfg.channels?.["signal-custom"]?.groups?.[params.groupId ?? ""],
           }),
         },
       },
@@ -56,7 +56,7 @@ describe("signalPlugin outbound sendMedia", () => {
 
     const cfg = {
       channels: {
-        signal: {
+        "signal-custom": {
           groups: {
             "signal:group:grp-1": {
               requireMention: false,
@@ -100,7 +100,7 @@ describe("signalPlugin outbound sendMedia", () => {
 
     await expect(
       signalPlugin.actions?.handleAction?.({
-        channel: "signal",
+        channel: "signal-custom",
         action: "react",
         cfg: {} as never,
         params: {},
@@ -136,11 +136,11 @@ describe("signalPlugin outbound sendMedia", () => {
     global.fetch = fetchMock;
     try {
       const result = await signalPlugin.actions?.handleAction?.({
-        channel: "signal",
+        channel: "signal-custom",
         action: "react",
         cfg: {
           channels: {
-            signal: {
+            "signal-custom": {
               account: "+15550001111",
               httpUrl: "http://signal.local",
             },
@@ -196,7 +196,7 @@ describe("signalPlugin outbound sendMedia", () => {
 
     await expect(
       signalPlugin.actions?.handleAction?.({
-        channel: "signal",
+        channel: "signal-custom",
         action: "react",
         cfg: {} as never,
         params: {
@@ -224,7 +224,7 @@ describe("signalPlugin outbound sendMedia", () => {
 
     await expect(
       signalPlugin.actions?.handleAction?.({
-        channel: "signal",
+        channel: "signal-custom",
         action: "react",
         cfg: {} as never,
         params: {
@@ -249,7 +249,7 @@ describe("signalPlugin outbound sendMedia", () => {
 
     const cfg = {
       channels: {
-        signal: {
+        "signal-custom": {
           account: "+15550001111",
           httpUrl: "http://signal.local",
         },
@@ -274,7 +274,7 @@ describe("signalPlugin outbound sendMedia", () => {
 
     const cfg = {
       channels: {
-        signal: {
+        "signal-custom": {
           account: "+15550001111",
           httpUrl: "http://signal.local",
           actions: {
@@ -301,7 +301,7 @@ describe("signalPlugin outbound sendMedia", () => {
 
     const cfg = {
       channels: {
-        signal: {
+        "signal-custom": {
           account: "+15550001111",
           httpUrl: "http://signal.local",
         },
@@ -318,11 +318,11 @@ describe("signalPlugin outbound sendMedia", () => {
   it("blocks group-management actions when actions.groupManagement is disabled", async () => {
     await expect(
       signalPlugin.actions?.handleAction?.({
-        channel: "signal",
+        channel: "signal-custom",
         action: "renameGroup",
         cfg: {
           channels: {
-            signal: {
+            "signal-custom": {
               account: "+15550001111",
               httpUrl: "http://signal.local",
               actions: {
@@ -366,11 +366,11 @@ describe("signalPlugin outbound sendMedia", () => {
     global.fetch = fetchMock;
     try {
       const result = await signalPlugin.actions?.handleAction?.({
-        channel: "signal",
+        channel: "signal-custom",
         action: "edit",
         cfg: {
           channels: {
-            signal: {
+            "signal-custom": {
               account: "+15550001111",
               httpUrl: "http://signal.local",
             },
@@ -426,11 +426,11 @@ describe("signalPlugin outbound sendMedia", () => {
     global.fetch = fetchMock;
     try {
       const result = await signalPlugin.actions?.handleAction?.({
-        channel: "signal",
+        channel: "signal-custom",
         action: "renameGroup",
         cfg: {
           channels: {
-            signal: {
+            "signal-custom": {
               account: "+15550001111",
               httpUrl: "http://signal.local",
             },
@@ -496,11 +496,11 @@ describe("signalPlugin outbound sendMedia", () => {
     global.fetch = fetchMock;
     try {
       const result = await signalPlugin.actions?.handleAction?.({
-        channel: "signal",
+        channel: "signal-custom",
         action: "sticker",
         cfg: {
           channels: {
-            signal: {
+            "signal-custom": {
               account: "+15550001111",
               httpUrl: "http://signal.local",
               actions: {
@@ -553,7 +553,7 @@ describe("signalPlugin outbound sendMedia", () => {
       const peers = await signalPlugin.directory?.listPeers?.({
         cfg: {
           channels: {
-            signal: {
+            "signal-custom": {
               account: "+15550001111",
               httpUrl: "http://signal.local",
             },
@@ -602,7 +602,7 @@ describe("signalPlugin outbound sendMedia", () => {
       const members = await signalPlugin.directory?.listGroupMembers?.({
         cfg: {
           channels: {
-            signal: {
+            "signal-custom": {
               account: "+15550001111",
               httpUrl: "http://signal.local",
             },

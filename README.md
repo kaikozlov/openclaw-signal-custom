@@ -5,14 +5,29 @@ Standalone repo for a custom fork of the OpenClaw Signal plugin.
 ## Branch model
 
 - `upstream-signal`: snapshot mirror of `openclaw/openclaw` `extensions/signal`.
-- `main`: your custom plugin branch (same logic, custom plugin id/name, plus your changes).
+- `main`: your custom plugin branch.
 
-## Initial behavior
+## Current behavior
 
-This repo keeps channel behavior equivalent to upstream Signal, but changes plugin identity so it can be enabled separately:
+This repo is moving toward a true standalone channel for stock upstream releases:
 
 - plugin id: `signal-custom`
+- channel id: `signal-custom`
 - package name: `@openclaw/signal-custom`
+- config root: `channels.signal-custom`
+
+What is standalone today:
+
+- config/account resolution
+- onboarding/setup
+- outbound sends
+- reactions, stickers, edit/delete, silent send
+- directory/group lookup and group-management actions
+- retry + TCP socket transport
+
+What is still pending for full Option 2 parity:
+
+- local daemon/probe/monitor/inbound stack
 
 ## Sync upstream Signal changes
 
@@ -42,3 +57,5 @@ openclaw plugins install -l /path/to/openclaw-signal-custom
 openclaw plugins enable signal-custom
 openclaw plugins disable signal
 ```
+
+Config lives under `channels.signal-custom`.

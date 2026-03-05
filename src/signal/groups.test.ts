@@ -22,7 +22,7 @@ describe("signal groups RPC", () => {
 
   const cfg = {
     channels: {
-      signal: {
+      "signal-custom": {
         account: "+15550001111",
         httpUrl: "http://signal.local",
       },

@@ -1,15 +1,16 @@
 # Sync Status
 
-Generated (UTC): 2026-03-05 20:09:55
+Generated (UTC): 2026-03-05 20:42:52
 
 Main branch: `main`
 Upstream snapshot branch: `upstream-signal`
 
-- `main` commits ahead of `upstream-signal`: 15
+- `main` commits ahead of `upstream-signal`: 16
 - `upstream-signal` commits ahead of `main`: 0
 
 ## Commits In `main` Not In `upstream-signal`
 
+- ef5e09c Docs: refresh sync status
 - ccf272a Signal: route outbound sends through local sender
 - dcf3f18 Signal: port #27155 socket transport and finalize PR parity
 - 101ccc4 Signal: port #27149 local reaction handling
@@ -32,6 +33,7 @@ Upstream snapshot branch: `upstream-signal`
 - .gitignore
 - MIGRATION_MAP.md
 - README.md
+- SYNC_STATUS.md
 - TASKS.md
 - index.ts
 - openclaw.plugin.json

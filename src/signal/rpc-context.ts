@@ -1,12 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { resolveSignalAccount } from "openclaw/plugin-sdk";
-
-export type SignalRetryConfig = {
-  attempts?: number;
-  minDelayMs?: number;
-  maxDelayMs?: number;
-  jitter?: number;
-};
+import { resolveSignalAccount, type SignalRetryConfig } from "../config.js";
 
 type SignalTransportConfig = {
   tcpHost?: unknown;
