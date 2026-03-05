@@ -64,6 +64,7 @@ import {
   removeGroupMemberSignal,
   updateGroupSignal,
 } from "./signal/groups.js";
+import { probeSignal } from "./signal/probe.js";
 import {
   looksLikeSignalCustomTargetId,
   normalizeSignalCustomMessagingTarget,
@@ -1153,8 +1154,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       lastProbeAt: snapshot.lastProbeAt ?? null,
     }),
     probeAccount: async ({ account, timeoutMs }) => {
-      const baseUrl = account.baseUrl;
-      return await getSignalRuntime().channel.signal.probeSignal(baseUrl, timeoutMs);
+      return await probeSignal(account.baseUrl, timeoutMs);
     },
     buildAccountSnapshot: ({ account, runtime, probe }) => ({
       ...buildBaseAccountStatusSnapshot({ account, runtime, probe }),

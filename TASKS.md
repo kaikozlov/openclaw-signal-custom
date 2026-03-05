@@ -27,8 +27,8 @@
 
 ## Phase 3: Finish Option 2
 
-- [ ] Copy local `daemon.ts`
-- [ ] Copy local `probe.ts`
+- [x] Copy local `daemon.ts`
+- [x] Copy local `probe.ts`
 - [ ] Copy local `monitor.ts`
 - [ ] Copy local `monitor/access-policy.ts`
 - [ ] Copy local `monitor/event-handler.ts`
@@ -36,7 +36,7 @@
 - [ ] Copy local `monitor/mentions.ts`
 - [ ] Replace hard-coded built-in `signal` inbound metadata with `signal-custom`
 - [ ] Swap `gateway.startAccount` to local monitor
-- [ ] Swap `status.probeAccount` to local probe
+- [x] Swap `status.probeAccount` to local probe
 
 ## Phase 4: Hardening After Standalone Inbound Lands
 

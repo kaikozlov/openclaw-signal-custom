@@ -1,0 +1,69 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { classifySignalCliLogLine } from "./daemon.js";
+import { probeSignal } from "./probe.js";
+
+const signalCheckMock = vi.fn();
+const signalRpcRequestMock = vi.fn();
+
+vi.mock("./client.js", () => ({
+  signalCheck: (...args: unknown[]) => signalCheckMock(...args),
+  signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
+}));
+
+describe("probeSignal", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("extracts version from object results", async () => {
+    signalCheckMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      error: null,
+    });
+    signalRpcRequestMock.mockResolvedValueOnce({ version: "0.13.22" });
+
+    const result = await probeSignal("http://127.0.0.1:8080", 1000);
+
+    expect(result.ok).toBe(true);
+    expect(result.version).toBe("0.13.22");
+    expect(result.status).toBe(200);
+  });
+
+  it("returns ok=false when /check fails", async () => {
+    signalCheckMock.mockResolvedValueOnce({
+      ok: false,
+      status: 503,
+      error: "HTTP 503",
+    });
+
+    const result = await probeSignal("http://127.0.0.1:8080", 1000);
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(503);
+    expect(result.version).toBe(null);
+  });
+});
+
+describe("classifySignalCliLogLine", () => {
+  it("treats info-like lines as log output", () => {
+    expect(classifySignalCliLogLine("INFO  DaemonCommand - Started")).toBe("log");
+    expect(classifySignalCliLogLine("DEBUG Something")).toBe("log");
+  });
+
+  it("treats warnings and errors as errors", () => {
+    expect(classifySignalCliLogLine("WARN  Something")).toBe("error");
+    expect(classifySignalCliLogLine("WARNING Something")).toBe("error");
+    expect(classifySignalCliLogLine("ERROR Something")).toBe("error");
+  });
+
+  it("treats untagged failures as errors", () => {
+    expect(classifySignalCliLogLine("Failed to initialize HTTP Server - oops")).toBe("error");
+    expect(classifySignalCliLogLine('Exception in thread "main"')).toBe("error");
+  });
+
+  it("returns null for empty lines", () => {
+    expect(classifySignalCliLogLine("")).toBe(null);
+    expect(classifySignalCliLogLine("   ")).toBe(null);
+  });
+});

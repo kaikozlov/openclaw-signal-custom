@@ -27,11 +27,11 @@ Done now:
 - plugin-local outbound sends, mentions, silent sends, reactions, stickers, edits, deletes
 - plugin-local directory, groups, and group-management actions
 - plugin-local retry and TCP socket transport
+- plugin-local daemon scaffolding and status probe
 
 Still not standalone:
 
 - inbound monitor/provider lifecycle
-- provider probe
 - runtime group-policy helper fallback
 - runtime fallback for unported message actions
 
@@ -42,7 +42,7 @@ Still not standalone:
 | WS1 | Standalone identity/config/account surface | structural | Done |
 | WS2 | Outbound/action parity on `signal-custom` | #27104, #27107, #27108, #27145, #27146, #27148, #27149, #27169, #27171 | Done |
 | WS3 | RPC hardening + TCP transport on `signal-custom` | #27144, #27155 | Done |
-| WS4 | Standalone daemon/probe/monitor stack | built-in Signal monitor stack | Next |
+| WS4 | Standalone monitor/provider lifecycle | built-in Signal monitor stack | Next |
 | WS5 | Inbound hardening + external Signal PR watchlist | #34546, #28417, #31232, #32026, #33851, #34177, others | Pending |
 
 ## Your PR Matrix
@@ -68,26 +68,23 @@ Still not standalone:
   - fallback `getSignalRuntime().channel.signal.messageActions`
   - `getSignalRuntime().channel.groups.resolveRequireMention`
   - `getSignalRuntime().channel.groups.resolveGroupPolicy`
-  - `getSignalRuntime().channel.signal.probeSignal`
   - `getSignalRuntime().channel.signal.monitorSignalProvider`
 - `src/signal/send.ts`
   - `channel.media.saveMediaBuffer`
   - `channel.text.resolveMarkdownTableMode`
 
-The first four are the real blockers for full Option 2 parity. The last two are generic runtime utilities and are acceptable unless they become unstable.
+The first three are the real blockers for full Option 2 parity. The last two are generic runtime utilities and are acceptable unless they become unstable.
 
 ## Next Copy Set
 
 Copy/adapt from upstream core into this repo:
 
-1. `src/signal/daemon.ts`
-2. `src/signal/probe.ts`
-3. `src/signal/monitor.ts`
-4. `src/signal/monitor/access-policy.ts`
-5. `src/signal/monitor/event-handler.ts`
-6. `src/signal/monitor/event-handler.types.ts`
-7. `src/signal/monitor/mentions.ts`
-8. any direct helper deps that are not exported through `openclaw/plugin-sdk`
+1. `src/signal/monitor.ts`
+2. `src/signal/monitor/access-policy.ts`
+3. `src/signal/monitor/event-handler.ts`
+4. `src/signal/monitor/event-handler.types.ts`
+5. `src/signal/monitor/mentions.ts`
+6. any direct helper deps that are not exported through `openclaw/plugin-sdk`
 
 ## Hard Rule
 

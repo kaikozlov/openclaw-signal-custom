@@ -1,15 +1,16 @@
 # Sync Status
 
-Generated (UTC): 2026-03-05 20:42:52
+Generated (UTC): 2026-03-05 20:51:33
 
 Main branch: `main`
 Upstream snapshot branch: `upstream-signal`
 
-- `main` commits ahead of `upstream-signal`: 16
+- `main` commits ahead of `upstream-signal`: 17
 - `upstream-signal` commits ahead of `main`: 0
 
 ## Commits In `main` Not In `upstream-signal`
 
+- 740a92e Signal: make signal-custom a standalone channel baseline
 - ef5e09c Docs: refresh sync status
 - ccf272a Signal: route outbound sends through local sender
 - dcf3f18 Signal: port #27155 socket transport and finalize PR parity
@@ -44,7 +45,11 @@ Upstream snapshot branch: `upstream-signal`
 - src/channel.outbound.test.ts
 - src/channel.test.ts
 - src/channel.ts
+- src/config.test.ts
+- src/config.ts
+- src/constants.ts
 - src/markdown/ir.ts
+- src/onboarding.ts
 - src/runtime.ts
 - src/signal/client.test.ts
 - src/signal/client.ts
@@ -62,4 +67,5 @@ Upstream snapshot branch: `upstream-signal`
 - src/signal/send.ts
 - src/signal/socket-client.test.ts
 - src/signal/socket-client.ts
+- src/targets.ts
 - tsconfig.json

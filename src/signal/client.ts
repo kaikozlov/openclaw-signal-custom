@@ -389,6 +389,30 @@ export async function signalRpcRequest<T = unknown>(
   return parsed.result as T;
 }
 
+export async function signalCheck(
+  baseUrl: string,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
+  const normalized = normalizeBaseUrl(baseUrl);
+  try {
+    const response = await fetchWithTimeout(
+      `${normalized}/api/v1/check`,
+      { method: "GET" },
+      timeoutMs,
+    );
+    if (!response.ok) {
+      return { ok: false, status: response.status, error: `HTTP ${response.status}` };
+    }
+    return { ok: true, status: response.status, error: null };
+  } catch (error) {
+    return {
+      ok: false,
+      status: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 export async function signalRpcRequestWithRetry<T = unknown>(
   method: string,
   params: Record<string, unknown> | undefined,
