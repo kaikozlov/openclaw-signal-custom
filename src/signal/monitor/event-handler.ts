@@ -463,11 +463,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
-    if ("syncMessage" in envelope) {
+    const dataMessage = envelope.dataMessage ?? envelope.editMessage?.dataMessage;
+    const maybeGroupId = dataMessage?.groupInfo?.groupId ?? undefined;
+
+    if ("syncMessage" in envelope && !maybeGroupId) {
       return;
     }
 
-    const dataMessage = envelope.dataMessage ?? envelope.editMessage?.dataMessage;
     const reaction = deps.isSignalReactionMessage(envelope.reactionMessage)
       ? envelope.reactionMessage
       : deps.isSignalReactionMessage(dataMessage?.reaction)
@@ -479,9 +481,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const messageText = normalizedMessage.trim();
 
     const quoteText = dataMessage?.quote?.text?.trim() ?? "";
-    const hasBodyContent =
-      Boolean(messageText || quoteText) || Boolean(!reaction && dataMessage?.attachments?.length);
-    const senderDisplay = formatSignalSenderDisplay(sender);
     const { resolveAccessDecision, dmAccess, effectiveDmAllow, effectiveGroupAllow } =
       await resolveSignalAccessState({
         accountId: deps.accountId,
@@ -491,6 +490,79 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         groupAllowFrom: deps.groupAllowFrom,
         sender,
       });
+
+    const bareReaction = dataMessage?.reaction;
+    const hasBareReactionField = !reaction && Boolean(bareReaction) && !messageText && !quoteText;
+    if (hasBareReactionField && bareReaction) {
+      const senderDisplayBare = formatSignalSenderDisplay(sender);
+      const emojiLabel = bareReaction.emoji?.trim() || "emoji";
+      const isRemove = Boolean(bareReaction.isRemove);
+      const targetTimestamp = bareReaction.targetSentTimestamp;
+      logVerbose(`signal: bare reaction (${emojiLabel}) from ${senderDisplayBare}`);
+      if (!isRemove) {
+        const groupId = bareReaction.groupInfo?.groupId ?? dataMessage?.groupInfo?.groupId ?? undefined;
+        const groupName =
+          bareReaction.groupInfo?.groupName ?? dataMessage?.groupInfo?.groupName ?? undefined;
+        const isGroup = Boolean(groupId);
+        const bareAccessDecision = resolveAccessDecision(isGroup);
+        if (bareAccessDecision.decision !== "allow") {
+          logVerbose(
+            `signal: bare reaction from unauthorized sender ${senderDisplayBare}, dropping (${bareAccessDecision.reason})`,
+          );
+          return;
+        }
+        const bareReactionTargets = deps.resolveSignalReactionTargets(bareReaction);
+        const shouldNotifyBare = deps.shouldEmitSignalReactionNotification({
+          mode: deps.reactionMode,
+          account: deps.account,
+          targets: bareReactionTargets,
+          sender,
+          allowlist: deps.reactionAllowlist,
+        });
+        if (!shouldNotifyBare) {
+          logVerbose(`signal: bare reaction suppressed (reactionMode=${deps.reactionMode})`);
+          return;
+        }
+        const senderName = envelope.sourceName ?? senderDisplayBare;
+        const senderPeerIdBare = resolveSignalPeerId(sender);
+        const routeBare = pluginRuntime.channel.routing.resolveAgentRoute({
+          cfg: deps.cfg,
+          channel: SIGNAL_CHANNEL_ID,
+          accountId: deps.accountId,
+          peer: {
+            kind: isGroup ? "group" : "direct",
+            id: isGroup ? (groupId ?? "unknown") : senderPeerIdBare,
+          },
+        });
+        const messageId = typeof targetTimestamp === "number" ? String(targetTimestamp) : "unknown";
+        const groupLabel = isGroup ? `${groupName ?? "Signal Group"} id:${groupId}` : undefined;
+        const text = deps.buildSignalReactionSystemEventText({
+          emojiLabel,
+          actorLabel: senderName,
+          messageId,
+          groupLabel,
+        });
+        pluginRuntime.system.enqueueSystemEvent(text, {
+          sessionKey: routeBare.sessionKey,
+          contextKey: [
+            SIGNAL_CHANNEL_ID,
+            "reaction",
+            "added",
+            messageId,
+            senderPeerIdBare,
+            emojiLabel,
+            groupId ?? "",
+          ]
+            .filter(Boolean)
+            .join(":"),
+        });
+      }
+      return;
+    }
+
+    const hasBodyContent =
+      Boolean(messageText || quoteText) || Boolean(!reaction && dataMessage?.attachments?.length);
+    const senderDisplay = formatSignalSenderDisplay(sender);
 
     if (
       reaction &&
@@ -519,6 +591,20 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const groupId = dataMessage.groupInfo?.groupId ?? undefined;
     const groupName = dataMessage.groupInfo?.groupName ?? undefined;
     const isGroup = Boolean(groupId);
+
+    const isTimerUpdate =
+      !messageText &&
+      !quoteText &&
+      !dataMessage.attachments?.length &&
+      (dataMessage.isExpirationUpdate === true ||
+        (typeof dataMessage.expiresInSeconds === "number" && dataMessage.expiresInSeconds > 0));
+    const isGroupV2Change = Boolean(dataMessage.groupV2Change);
+    if (isTimerUpdate || isGroupV2Change) {
+      logVerbose(
+        `signal: skipping system message (isTimerUpdate=${isTimerUpdate}, isGroupV2Change=${isGroupV2Change})`,
+      );
+      return;
+    }
 
     if (!isGroup) {
       const allowedDirectMessage = await handleSignalDirectMessageAccess({
@@ -681,10 +767,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }
     }
 
-    const kind = pluginRuntime.media.mediaKindFromMime(mediaType ?? undefined);
-    if (kind) {
+    const kind = mediaType ? pluginRuntime.media.mediaKindFromMime(mediaType) : undefined;
+    if (kind && kind !== "unknown") {
       placeholder = `<media:${kind}>`;
-    } else if (dataMessage.attachments?.length) {
+    } else if (kind === "unknown" || (!kind && dataMessage.attachments?.length)) {
       placeholder = "<media:attachment>";
     }
 

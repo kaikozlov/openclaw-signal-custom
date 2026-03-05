@@ -43,7 +43,7 @@ Still not fully hardened:
 | WS2 | Outbound/action parity on `signal-custom` | #27104, #27107, #27108, #27145, #27146, #27148, #27149, #27169, #27171 | Done |
 | WS3 | RPC hardening + TCP transport on `signal-custom` | #27144, #27155 | Done |
 | WS4 | Standalone monitor/provider lifecycle | built-in Signal monitor stack | Done |
-| WS5 | Inbound hardening + external Signal PR watchlist | #34546, #28417, #31232, #32026, #33851, #34177, others | In Progress |
+| WS5 | Inbound hardening + external Signal PR watchlist | #34546, #28417, #31232, #32026, #33851, #34177, others | Probe + core inbound fixes done |
 
 ## Your PR Matrix
 
@@ -78,8 +78,8 @@ These are generic host utility seams, not built-in `signal` ownership seams. The
 
 Focus after the standalone baseline:
 
-1. port inbound edge-case fixes (`#34546`, `#28417`, `#31232`, `#32026`)
-2. review guard/failure hardening PRs
+1. review guard/failure hardening PRs (`#35931`, `#35600`, `#35490`)
+2. review pairing/allowlist isolation fixes (`#26029`, `#26617`, `#26639`)
 3. decide whether to replace the remaining generic runtime helper seams
 
 ## Hard Rule

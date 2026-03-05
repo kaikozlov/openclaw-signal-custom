@@ -1,15 +1,16 @@
 # Sync Status
 
-Generated (UTC): 2026-03-05 21:51:22
+Generated (UTC): 2026-03-05 21:54:08
 
 Main branch: `main`
 Upstream snapshot branch: `upstream-signal`
 
-- `main` commits ahead of `upstream-signal`: 20
+- `main` commits ahead of `upstream-signal`: 21
 - `upstream-signal` commits ahead of `main`: 0
 
 ## Commits In `main` Not In `upstream-signal`
 
+- 3f4d8bf Signal: harden probe for JSON-RPC-only daemons
 - 68b5062 Signal: remove built-in action fallback
 - 8213f66 Signal: add local monitor and inbound stack
 - 07222e9 Signal: add local daemon and probe

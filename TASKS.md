@@ -43,7 +43,7 @@
 - [x] Audit remaining generic runtime seams
 - [ ] Decide whether to replace the remaining generic runtime helper usage
 - [x] Port probe reliability fixes (`#33851`, `#34177`)
-- [ ] Port inbound edge-case fixes (`#34546`, `#28417`, `#31232`, `#32026`)
+- [x] Port inbound edge-case fixes (`#34546`, `#28417`, `#31232`, `#32026`)
 - [ ] Port defensive guard fixes (`#35931`, `#35600`, `#35490`)
 - [ ] Review pairing/allowlist isolation fixes (`#26029`, `#26617`, `#26639`)
 
