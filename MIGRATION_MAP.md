@@ -32,7 +32,6 @@ Done now:
 
 Still not fully hardened:
 
-- runtime fallback for unported message actions
 - generic runtime helper usage for media staging / markdown table mode
 - watchlist PRs not yet ported
 
@@ -65,8 +64,6 @@ Still not fully hardened:
 
 ## Remaining Runtime Seams
 
-- `src/channel.ts`
-  - fallback `getSignalRuntime().channel.signal.messageActions`
 - `src/signal/send.ts`
   - `channel.media.saveMediaBuffer`
   - `channel.text.resolveMarkdownTableMode`
@@ -75,7 +72,7 @@ Still not fully hardened:
 - `src/signal/monitor/event-handler.ts`
   - generic runtime reply/routing/session/pairing helpers
 
-These are generic host utility seams, not built-in `signal` ownership seams. The plugin now owns the channel-specific config, outbound, daemon, probe, inbound, and gateway flow.
+These are generic host utility seams, not built-in `signal` ownership seams. The plugin now owns the channel-specific config, outbound, daemon, probe, inbound, gateway flow, and action routing.
 
 ## Next Copy Set
 

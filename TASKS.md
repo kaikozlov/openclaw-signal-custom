@@ -40,7 +40,8 @@
 
 ## Phase 4: Hardening After Standalone Inbound Lands
 
-- [ ] Audit remaining generic runtime seams (`messageActions`, media staging, markdown table mode)
+- [x] Audit remaining generic runtime seams
+- [ ] Decide whether to replace the remaining generic runtime helper usage
 - [ ] Port probe reliability fixes (`#33851`, `#34177`)
 - [ ] Port inbound edge-case fixes (`#34546`, `#28417`, `#31232`, `#32026`)
 - [ ] Port defensive guard fixes (`#35931`, `#35600`, `#35490`)

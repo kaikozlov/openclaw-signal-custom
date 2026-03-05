@@ -23,6 +23,7 @@ import {
   setAccountEnabledInConfigSection,
   type ChannelGroupContext,
   type ChannelMessageActionAdapter,
+  type ChannelMessageActionName,
   type ChannelPlugin,
   type GroupToolPolicyBySenderConfig,
   type GroupToolPolicyConfig,
@@ -77,8 +78,7 @@ type ReactionToolContext = {
 
 const signalMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
-    const runtimeActions = getSignalRuntime().channel.signal.messageActions?.listActions?.({ cfg }) ?? [];
-    const actions = new Set(runtimeActions);
+    const actions = new Set<ChannelMessageActionName>();
     const configuredAccounts = listSignalAccountIds(cfg)
       .map((accountId) => resolveSignalAccount({ cfg, accountId }))
       .filter((account) => account.enabled && account.configured);
@@ -132,8 +132,7 @@ const signalMessageActions: ChannelMessageActionAdapter = {
     action === "sticker-search" ||
     SIGNAL_GROUP_MANAGEMENT_ACTIONS.includes(
       action as (typeof SIGNAL_GROUP_MANAGEMENT_ACTIONS)[number],
-    ) ||
-    (getSignalRuntime().channel.signal.messageActions?.supportsAction?.({ action }) ?? false),
+    ),
   handleAction: async (ctx) => {
     if (ctx.action === "edit") {
       const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
@@ -355,11 +354,7 @@ const signalMessageActions: ChannelMessageActionAdapter = {
       });
       return jsonResult({ ok: true, added: emoji, timestamp: result.timestamp });
     }
-    const ma = getSignalRuntime().channel.signal.messageActions;
-    if (!ma?.handleAction) {
-      throw new Error("Signal message actions not available");
-    }
-    return ma.handleAction(ctx);
+    throw new Error(`Action ${ctx.action} not supported for ${SIGNAL_CHANNEL_ID}.`);
   },
 };
 

@@ -1,15 +1,16 @@
 # Sync Status
 
-Generated (UTC): 2026-03-05 21:07:54
+Generated (UTC): 2026-03-05 21:09:52
 
 Main branch: `main`
 Upstream snapshot branch: `upstream-signal`
 
-- `main` commits ahead of `upstream-signal`: 18
+- `main` commits ahead of `upstream-signal`: 19
 - `upstream-signal` commits ahead of `main`: 0
 
 ## Commits In `main` Not In `upstream-signal`
 
+- 8213f66 Signal: add local monitor and inbound stack
 - 07222e9 Signal: add local daemon and probe
 - 740a92e Signal: make signal-custom a standalone channel baseline
 - ef5e09c Docs: refresh sync status
@@ -60,6 +61,14 @@ Upstream snapshot branch: `upstream-signal`
 - src/signal/format.ts
 - src/signal/groups.test.ts
 - src/signal/groups.ts
+- src/signal/identity.ts
+- src/signal/inbound-debounce.ts
+- src/signal/monitor.test.ts
+- src/signal/monitor.ts
+- src/signal/monitor/access-policy.ts
+- src/signal/monitor/event-handler.ts
+- src/signal/monitor/event-handler.types.ts
+- src/signal/monitor/mentions.ts
 - src/signal/probe.test.ts
 - src/signal/probe.ts
 - src/signal/rpc-context.ts
