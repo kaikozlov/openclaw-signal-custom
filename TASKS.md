@@ -24,7 +24,7 @@ This is the execution checklist. We keep it updated as we land each slice.
 
 ## Phase 3: WS2 RPC + Transport
 
-- [ ] Port `#27144` typed RPC errors + retry/backoff
+- [ ] Port `#27144` typed RPC errors + retry/backoff (in progress: plugin-local client landed)
 - [ ] Port probe reliability improvements (`#33851`, `#34177`)
 - [ ] Port `#27155` TCP socket transport
 
