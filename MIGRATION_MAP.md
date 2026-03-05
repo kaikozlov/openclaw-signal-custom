@@ -115,11 +115,22 @@ Reviewed and regression-covered here without code changes:
 
 These are generic host utility seams, not built-in `signal` ownership seams. The plugin now owns the channel-specific config, outbound, daemon, probe, inbound, gateway flow, and action routing.
 
+Decision:
+
+- keep the remaining generic runtime seams
+- do not copy shared host utilities just to eliminate SDK calls
+
+Why:
+
+- these helpers are channel-agnostic host services, not built-in Signal behavior
+- copying them would create unnecessary divergence from upstream
+- keeping them shared improves reintegration odds and reduces maintenance cost
+
 ## Next Copy Set
 
 Focus after the standalone baseline:
 
-1. decide whether to replace the remaining generic runtime helper seams
+1. watch for new Signal PRs that materially improve the standalone channel
 
 ## Hard Rule
 

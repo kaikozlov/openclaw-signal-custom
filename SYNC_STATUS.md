@@ -1,15 +1,16 @@
 # Sync Status
 
-Generated (UTC): 2026-03-05 22:05:30
+Generated (UTC): 2026-03-05 22:05:59
 
 Main branch: `main`
 Upstream snapshot branch: `upstream-signal`
 
-- `main` commits ahead of `upstream-signal`: 23
+- `main` commits ahead of `upstream-signal`: 24
 - `upstream-signal` commits ahead of `main`: 0
 
 ## Commits In `main` Not In `upstream-signal`
 
+- cb1a9d2 Signal: verify pairing isolation invariants
 - d59bd39 Signal: harden monitor and reaction guards
 - 9c5e6e1 Signal: harden inbound event handling
 - 3f4d8bf Signal: harden probe for JSON-RPC-only daemons
@@ -68,6 +69,7 @@ Upstream snapshot branch: `upstream-signal`
 - src/signal/identity.ts
 - src/signal/inbound-debounce.ts
 - src/signal/monitor.edge-cases.test.ts
+- src/signal/monitor.pairing-isolation.test.ts
 - src/signal/monitor.test.ts
 - src/signal/monitor.ts
 - src/signal/monitor/access-policy.ts
