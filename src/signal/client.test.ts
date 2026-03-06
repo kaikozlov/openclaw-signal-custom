@@ -1,3 +1,4 @@
+import net from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   detectSignalApiMode,
@@ -8,6 +9,7 @@ import {
   SignalRpcError,
   signalRpcRequest,
   signalRpcRequestWithRetry,
+  streamSignalSocketEvents,
 } from "./client.js";
 
 function makeResponse(params: {
@@ -24,18 +26,83 @@ function makeResponse(params: {
   } as Response;
 }
 
+function createSocketEventServer() {
+  const connections: net.Socket[] = [];
+  const server = net.createServer((socket) => {
+    connections.push(socket);
+    socket.on("close", () => {
+      const idx = connections.indexOf(socket);
+      if (idx !== -1) {
+        connections.splice(idx, 1);
+      }
+    });
+
+    let buffer = "";
+    socket.on("data", (data) => {
+      buffer += data.toString("utf8");
+      let idx = buffer.indexOf("\n");
+      while (idx !== -1) {
+        const line = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 1);
+        if (line) {
+          const req = JSON.parse(line) as { id: string; method: string };
+          socket.write(`${JSON.stringify({ jsonrpc: "2.0", result: 1, id: req.id })}\n`);
+          if (req.method === "subscribeReceive") {
+            socket.write(
+              `${JSON.stringify({
+                jsonrpc: "2.0",
+                method: "receive",
+                params: {
+                  subscription: 1,
+                  result: {
+                    envelope: {
+                      sourceNumber: "+15550001111",
+                      dataMessage: { message: "hello" },
+                    },
+                  },
+                },
+              })}\n`,
+            );
+          }
+        }
+        idx = buffer.indexOf("\n");
+      }
+    });
+  });
+
+  return {
+    async listen() {
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Failed to resolve server address");
+      }
+      return address.port;
+    },
+    async close() {
+      for (const connection of connections) {
+        connection.destroy();
+      }
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
 describe("signal client typed errors and retry", () => {
   const originalFetch = global.fetch;
   const fetchMock = vi.fn<typeof fetch>();
+  let socketEventServer: ReturnType<typeof createSocketEventServer> | null = null;
 
   beforeEach(() => {
     fetchMock.mockReset();
     global.fetch = fetchMock;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     global.fetch = originalFetch;
     resetSignalSocketRegistryForTests();
+    await socketEventServer?.close();
+    socketEventServer = null;
   });
 
   it("throws SignalRpcError for JSON-RPC errors", async () => {
@@ -334,6 +401,41 @@ describe("signal client typed errors and retry", () => {
       onEvent: () => {},
     });
 
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("streams receive notifications over the JSON-RPC socket in manual mode", async () => {
+    socketEventServer = createSocketEventServer();
+    const port = await socketEventServer.listen();
+    const controller = new AbortController();
+    const events: Array<{ event?: string; data?: string }> = [];
+
+    const streamPromise = streamSignalSocketEvents({
+      host: "127.0.0.1",
+      port,
+      abortSignal: controller.signal,
+      receiveMode: "manual",
+      onEvent: (event) => {
+        events.push(event);
+        controller.abort();
+      },
+    });
+
+    await streamPromise;
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual(
+      expect.objectContaining({
+        event: "receive",
+      }),
+    );
+    expect(JSON.parse(String(events[0]?.data))).toEqual(
+      expect.objectContaining({
+        envelope: expect.objectContaining({
+          sourceNumber: "+15550001111",
+        }),
+      }),
+    );
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

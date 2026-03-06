@@ -23,6 +23,7 @@ import {
   signalCheck,
   signalRpcRequest,
   streamSignalEvents,
+  streamSignalSocketEvents,
   type SignalSseEvent,
 } from "./client.js";
 import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
@@ -597,14 +598,78 @@ async function runSignalJsonRpcPollLoop(params: {
   }
 }
 
-async function runSignalReceiveLoop(params: {
-  baseUrl: string;
-  account?: string;
+async function runSignalSocketReceiveLoop(params: {
+  host: string;
+  port: number;
   abortSignal?: AbortSignal;
   runtime: RuntimeEnv;
   onEvent: (event: SignalSseEvent) => void;
+  receiveMode?: "on-start" | "manual";
   policy?: Partial<BackoffPolicy>;
 }) {
+  const reconnectPolicy = {
+    ...DEFAULT_RECONNECT_POLICY,
+    ...params.policy,
+  };
+  let consecutiveErrors = 0;
+
+  while (!params.abortSignal?.aborted) {
+    try {
+      await streamSignalSocketEvents({
+        host: params.host,
+        port: params.port,
+        abortSignal: params.abortSignal,
+        receiveMode: params.receiveMode,
+        onEvent: params.onEvent,
+        log: params.runtime.log,
+        error: params.runtime.error,
+      });
+      return;
+    } catch (err) {
+      if (params.abortSignal?.aborted) {
+        return;
+      }
+      params.runtime.error?.(`Signal socket receive error: ${String(err)}`);
+      consecutiveErrors += 1;
+      const delayMs = computeBackoff(reconnectPolicy, consecutiveErrors);
+      params.runtime.log?.(`Signal socket receive failed, retrying in ${delayMs / 1000}s...`);
+      try {
+        await sleepWithAbort(delayMs, params.abortSignal);
+      } catch (sleepErr) {
+        if (params.abortSignal?.aborted) {
+          return;
+        }
+        throw sleepErr;
+      }
+    }
+  }
+}
+
+async function runSignalReceiveLoop(params: {
+  baseUrl: string;
+  account?: string;
+  tcpHost?: string;
+  tcpPort?: number;
+  abortSignal?: AbortSignal;
+  runtime: RuntimeEnv;
+  onEvent: (event: SignalSseEvent) => void;
+  receiveMode?: "on-start" | "manual";
+  policy?: Partial<BackoffPolicy>;
+}) {
+  const tcpHost = params.tcpHost?.trim();
+  const tcpPort = params.tcpPort;
+  if (tcpHost && typeof tcpPort === "number" && Number.isFinite(tcpPort) && tcpPort > 0) {
+    params.runtime.log?.(`Signal receive mode: jsonrpc-socket`);
+    return await runSignalSocketReceiveLoop({
+      host: tcpHost,
+      port: Math.trunc(tcpPort),
+      abortSignal: params.abortSignal,
+      runtime: params.runtime,
+      onEvent: params.onEvent,
+      receiveMode: params.receiveMode,
+      policy: params.policy,
+    });
+  }
   const mode = await detectSignalApiMode(params.baseUrl);
   params.runtime.log?.(`Signal receive mode: ${mode}`);
   if (mode === "sse") {
@@ -757,8 +822,11 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     await runSignalReceiveLoop({
       baseUrl,
       account,
+      tcpHost: accountInfo.config.tcpHost,
+      tcpPort: accountInfo.config.tcpPort,
       abortSignal: daemonLifecycle.abortSignal,
       runtime,
+      receiveMode: opts.receiveMode ?? accountInfo.config.receiveMode ?? "manual",
       policy: opts.reconnectPolicy,
       onEvent: (event) => {
         void handleEvent(event).catch((err) => {

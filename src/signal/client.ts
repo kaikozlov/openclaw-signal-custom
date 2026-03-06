@@ -179,6 +179,17 @@ function isMissingReceiveAccountError(error: unknown): boolean {
   return error.code === -32600 && /requires valid account parameter/i.test(error.message);
 }
 
+function normalizeSocketReceivePayload(params: unknown): unknown {
+  if (!params || typeof params !== "object") {
+    return params;
+  }
+  const receiveParams = params as Record<string, unknown>;
+  if (Object.hasOwn(receiveParams, "result")) {
+    return receiveParams.result;
+  }
+  return params;
+}
+
 function isTimeoutLikeError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
@@ -596,6 +607,67 @@ export async function pollSignalJsonRpc(params: {
       event: "receive",
       data: JSON.stringify(entry),
     });
+  }
+}
+
+export async function streamSignalSocketEvents(params: {
+  host: string;
+  port: number;
+  abortSignal?: AbortSignal;
+  receiveMode?: "on-start" | "manual";
+  onEvent: (event: SignalSseEvent) => void;
+  log?: (message: string) => void;
+  error?: (message: string) => void;
+}): Promise<void> {
+  let initialConnectPending = true;
+  let rejectFatal!: (error: Error) => void;
+  const fatalPromise = new Promise<never>((_, reject) => {
+    rejectFatal = reject;
+  });
+
+  const client = new SignalSocketClient({
+    host: params.host,
+    port: params.port,
+    reconnect: true,
+    log: params.log,
+    error: params.error,
+    onConnect: () => {
+      if (initialConnectPending || params.receiveMode !== "manual") {
+        return;
+      }
+      void client.request("subscribeReceive").catch((error) => {
+        rejectFatal(normalizeError(error));
+      });
+    },
+    onEvent: (event) => {
+      if (event.method !== "receive") {
+        return;
+      }
+      params.onEvent({
+        event: "receive",
+        data: JSON.stringify(normalizeSocketReceivePayload(event.params)),
+      });
+    },
+  });
+
+  const abortPromise = new Promise<void>((resolve) => {
+    if (params.abortSignal?.aborted) {
+      resolve();
+      return;
+    }
+    params.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+  });
+
+  try {
+    client.connect();
+    await client.waitForConnect(params.abortSignal);
+    initialConnectPending = false;
+    if (params.receiveMode === "manual") {
+      await client.request("subscribeReceive");
+    }
+    await Promise.race([abortPromise, fatalPromise]);
+  } finally {
+    client.close();
   }
 }
 
