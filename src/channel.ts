@@ -916,7 +916,15 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         cfg,
         sectionKey: SIGNAL_CHANNEL_ID,
         accountId,
-        clearBaseFields: ["account", "httpUrl", "httpHost", "httpPort", "cliPath", "name"],
+        clearBaseFields: [
+          "account",
+          "httpUrl",
+          "httpHost",
+          "httpPort",
+          "cliPath",
+          "configPath",
+          "name",
+        ],
       }),
     isConfigured: (account) => account.configured,
     describeAccount: (account) => ({

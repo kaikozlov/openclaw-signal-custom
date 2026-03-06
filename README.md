@@ -24,6 +24,7 @@ What is standalone today:
 - reactions, ACK reactions, stickers, edit/delete, silent send
 - directory/group lookup and group-management actions
 - retry + TCP socket transport
+- configurable `signal-cli --config` path and validated daemon spawn path
 - local daemon startup
 - local status probe
 - local monitor/inbound event handling, including JSON-RPC receive fallback

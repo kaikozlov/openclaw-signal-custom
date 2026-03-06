@@ -57,7 +57,9 @@
 - [x] Port DM route isolation fix for `session.dmScope=per-channel-peer` (`#31739`)
 - [x] Port native JSON-RPC WebSocket receive loop (`#19398`)
 - [x] Implement `reactionLevel: "ack"` behavior (`#31078`)
-- [ ] Review lower-priority candidates (`#8767`, `#27771`, `#15994`, `#15956`, `#16085`)
+- [x] Port `cliPath` validation before daemon spawn (`#8767`)
+- [x] Port `configPath` support for signal-cli daemon startup (`#27771`)
+- [ ] Review remaining lower-priority candidates (`#15994`, `#15956`, `#16085`)
 
 ## Rules
 

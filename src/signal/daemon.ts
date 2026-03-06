@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { isSafeExecutableValue } from "../exec-safety.js";
 
 type SignalDaemonRuntime = {
   log?: (message: string) => void;
@@ -7,6 +8,7 @@ type SignalDaemonRuntime = {
 
 export type SignalDaemonOpts = {
   cliPath: string;
+  configPath?: string;
   account?: string;
   httpHost: string;
   httpPort: number;
@@ -72,6 +74,9 @@ function bindSignalCliOutput(params: {
 
 function buildDaemonArgs(opts: SignalDaemonOpts): string[] {
   const args: string[] = [];
+  if (opts.configPath?.trim()) {
+    args.push("--config", opts.configPath.trim());
+  }
   if (opts.account) {
     args.push("-a", opts.account);
   }
@@ -98,6 +103,9 @@ function buildDaemonArgs(opts: SignalDaemonOpts): string[] {
 }
 
 export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
+  if (!isSafeExecutableValue(opts.cliPath)) {
+    throw new Error(`Invalid signal-cli path: ${opts.cliPath}`);
+  }
   const args = buildDaemonArgs(opts);
   const child = spawn(opts.cliPath, args, {
     stdio: ["ignore", "pipe", "pipe"],

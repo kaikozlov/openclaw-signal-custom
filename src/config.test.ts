@@ -16,6 +16,7 @@ describe("signal-custom config", () => {
       account: "+15550001111",
       httpUrl: "http://signal.local",
       ackReaction: "👀",
+      configPath: "/tmp/signal-cli-config",
       tcpHost: "127.0.0.1",
       tcpPort: 7583,
       sseIdleTimeoutMs: 0,
@@ -56,6 +57,7 @@ describe("signal-custom config", () => {
             Work: {
               account: "+15550002222",
               httpUrl: "http://signal-work.local",
+              configPath: "/tmp/signal-work",
               tcpHost: "127.0.0.1",
               tcpPort: 7583,
             },
@@ -75,6 +77,9 @@ describe("signal-custom config", () => {
       expect.objectContaining({
         accountId: "work",
         baseUrl: "http://signal-work.local",
+        config: expect.objectContaining({
+          configPath: "/tmp/signal-work",
+        }),
         tcpHost: "127.0.0.1",
         tcpPort: 7583,
         configured: true,

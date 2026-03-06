@@ -43,7 +43,7 @@ Still not fully hardened:
 | WS2 | Outbound/action parity on `signal-custom` | #27104, #27107, #27108, #27145, #27146, #27148, #27149, #27169, #27171 | Done |
 | WS3 | RPC hardening + TCP transport on `signal-custom` | #27144, #27155 | Done |
 | WS4 | Standalone monitor/provider lifecycle | built-in Signal monitor stack | Done |
-| WS5 | Inbound hardening + external Signal PR watchlist | #34546, #28417, #31232, #32026, #33851, #34177, #35931, #35600, #35490, #24273, #36630, #10958, #17818, #17453, #31347, #31739, #19398, #31078, others | Probe + inbound + guard + quote/reply + reaction compatibility + dmScope isolation + JSON-RPC receive fallback + ACK reactions done |
+| WS5 | Inbound hardening + external Signal PR watchlist | #34546, #28417, #31232, #32026, #33851, #34177, #35931, #35600, #35490, #24273, #36630, #10958, #17818, #17453, #31347, #31739, #19398, #31078, #8767, #27771, others | Probe + inbound + guard + quote/reply + reaction compatibility + dmScope isolation + JSON-RPC receive fallback + ACK reactions + daemon/config hardening done |
 
 ## Your PR Matrix
 
@@ -67,8 +67,8 @@ Still not fully hardened:
 Current PR-backed port count:
 
 - your PRs ported: `12`
-- other Signal PRs ported: `21`
-- total PR-backed ports integrated: `33`
+- other Signal PRs ported: `23`
+- total PR-backed ports integrated: `35`
 
 Your PR set now integrated here:
 
@@ -99,6 +99,8 @@ Additional open Signal PRs already ported here:
 - #31739
 - #19398
 - #31078
+- #8767
+- #27771
 - #33851
 - #34177
 - #34546
@@ -191,12 +193,12 @@ These are the remaining open Signal PRs that look materially useful for `signal-
 - `#31739`: isolated DM scopes no longer overwrite main-session last-route metadata
 - `#19398`: the monitor now falls back to JSON-RPC `receive` polling when SSE `/api/v1/events` is unavailable
 - `#31078`: `reactionLevel: "ack"` now sends immediate ACK reactions before reply dispatch, with shared scope gating
+- `#8767`: daemon startup now rejects unsafe `cliPath` values before spawning `signal-cli`
+- `#27771`: `configPath` is now supported and passed through as `signal-cli --config ...` on local daemon startup
 - `#6591`: parallel attachment fetch behavior is covered locally, but the PR's extra UX/quote formatting pieces are not yet ported
 
 ### Lower-Priority Candidates
 
-- #8767: validate `cliPath` before spawn
-- #27771: configurable Signal config path
 - #15994: unsend + poll lifecycle actions
 - #15956: broad inbound metadata preservation bundle
 - #16085: container REST-mode compatibility
