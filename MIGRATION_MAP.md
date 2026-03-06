@@ -43,7 +43,7 @@ Still not fully hardened:
 | WS2 | Outbound/action parity on `signal-custom` | #27104, #27107, #27108, #27145, #27146, #27148, #27149, #27169, #27171 | Done |
 | WS3 | RPC hardening + TCP transport on `signal-custom` | #27144, #27155 | Done |
 | WS4 | Standalone monitor/provider lifecycle | built-in Signal monitor stack | Done |
-| WS5 | Inbound hardening + external Signal PR watchlist | #34546, #28417, #31232, #32026, #33851, #34177, #35931, #35600, #35490, #24273, #36630, #10958, #17818, #17453, #31347, others | Probe + inbound + guard + quote/reply + reaction compatibility done |
+| WS5 | Inbound hardening + external Signal PR watchlist | #34546, #28417, #31232, #32026, #33851, #34177, #35931, #35600, #35490, #24273, #36630, #10958, #17818, #17453, #31347, #31739, others | Probe + inbound + guard + quote/reply + reaction compatibility + dmScope isolation done |
 
 ## Your PR Matrix
 
@@ -67,8 +67,8 @@ Still not fully hardened:
 Current PR-backed port count:
 
 - your PRs ported: `12`
-- other Signal PRs ported: `18`
-- total PR-backed ports integrated: `30`
+- other Signal PRs ported: `20`
+- total PR-backed ports integrated: `32`
 
 Your PR set now integrated here:
 
@@ -96,6 +96,8 @@ Additional open Signal PRs already ported here:
 - #17818
 - #17453
 - #31347
+- #31739
+- #19398
 - #33851
 - #34177
 - #34546
@@ -185,6 +187,8 @@ These are the remaining open Signal PRs that look materially useful for `signal-
 - `#17818`: legacy `source` sender fallback is now accepted for older Signal payloads
 - `#17453`: group reaction sends can now hydrate `targetAuthor`/`targetAuthorUuid` from a local inbound cache
 - `#31347`: newer reaction envelope shapes and edit/delete/pin/unpin control events are now handled locally
+- `#31739`: isolated DM scopes no longer overwrite main-session last-route metadata
+- `#19398`: the monitor now falls back to JSON-RPC `receive` polling when SSE `/api/v1/events` is unavailable
 - `#6591`: parallel attachment fetch behavior is covered locally, but the PR's extra UX/quote formatting pieces are not yet ported
 
 ### Lower-Priority Candidates

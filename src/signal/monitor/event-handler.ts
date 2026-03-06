@@ -237,7 +237,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       storePath,
       sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
       ctx: ctxPayload,
-      updateLastRoute: !entry.isGroup
+      updateLastRoute: !entry.isGroup && route.sessionKey === route.mainSessionKey
         ? {
             sessionKey: route.mainSessionKey,
             channel: SIGNAL_CHANNEL_ID,

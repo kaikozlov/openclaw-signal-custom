@@ -17,7 +17,14 @@ import {
   resolveSignalSender,
   type SignalSender,
 } from "./identity.js";
-import { signalCheck, signalRpcRequest, streamSignalEvents, type SignalSseEvent } from "./client.js";
+import {
+  detectSignalApiMode,
+  pollSignalJsonRpc,
+  signalCheck,
+  signalRpcRequest,
+  streamSignalEvents,
+  type SignalSseEvent,
+} from "./client.js";
 import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
 import { createSignalEventHandler } from "./monitor/event-handler.js";
 import type {
@@ -545,6 +552,66 @@ async function runSignalSseLoop(params: {
   }
 }
 
+async function runSignalJsonRpcPollLoop(params: {
+  baseUrl: string;
+  account?: string;
+  abortSignal?: AbortSignal;
+  runtime: RuntimeEnv;
+  onEvent: (event: SignalSseEvent) => void;
+  policy?: Partial<BackoffPolicy>;
+}) {
+  const reconnectPolicy = {
+    ...DEFAULT_RECONNECT_POLICY,
+    ...params.policy,
+  };
+  let consecutiveErrors = 0;
+
+  while (!params.abortSignal?.aborted) {
+    try {
+      await pollSignalJsonRpc({
+        baseUrl: params.baseUrl,
+        account: params.account,
+        abortSignal: params.abortSignal,
+        onEvent: params.onEvent,
+        pollTimeoutSec: 10,
+      });
+      consecutiveErrors = 0;
+    } catch (err) {
+      if (params.abortSignal?.aborted) {
+        return;
+      }
+      params.runtime.error?.(`Signal JSON-RPC poll error: ${String(err)}`);
+      consecutiveErrors += 1;
+      const delayMs = computeBackoff(reconnectPolicy, consecutiveErrors);
+      params.runtime.log?.(`Signal JSON-RPC poll failed, retrying in ${delayMs / 1000}s...`);
+      try {
+        await sleepWithAbort(delayMs, params.abortSignal);
+      } catch (sleepErr) {
+        if (params.abortSignal?.aborted) {
+          return;
+        }
+        throw sleepErr;
+      }
+    }
+  }
+}
+
+async function runSignalReceiveLoop(params: {
+  baseUrl: string;
+  account?: string;
+  abortSignal?: AbortSignal;
+  runtime: RuntimeEnv;
+  onEvent: (event: SignalSseEvent) => void;
+  policy?: Partial<BackoffPolicy>;
+}) {
+  const mode = await detectSignalApiMode(params.baseUrl);
+  params.runtime.log?.(`Signal receive mode: ${mode}`);
+  if (mode === "sse") {
+    return await runSignalSseLoop(params);
+  }
+  return await runSignalJsonRpcPollLoop(params);
+}
+
 export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promise<void> {
   const runtime = resolveRuntime(opts);
   const cfg = resolveConfig(opts);
@@ -622,7 +689,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       httpPort,
       tcpHost: accountInfo.config.tcpHost,
       tcpPort: accountInfo.config.tcpPort,
-      receiveMode: opts.receiveMode ?? accountInfo.config.receiveMode,
+      receiveMode: opts.receiveMode ?? accountInfo.config.receiveMode ?? "manual",
       ignoreAttachments: opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments,
       ignoreStories: opts.ignoreStories ?? accountInfo.config.ignoreStories,
       sendReadReceipts,
@@ -681,7 +748,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       buildSignalReactionSystemEventText,
     });
 
-    await runSignalSseLoop({
+    await runSignalReceiveLoop({
       baseUrl,
       account,
       abortSignal: daemonLifecycle.abortSignal,

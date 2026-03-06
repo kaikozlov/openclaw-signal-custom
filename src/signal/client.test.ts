@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  detectSignalApiMode,
+  pollSignalJsonRpc,
   resetSignalSocketRegistryForTests,
   SignalHttpError,
   SignalNetworkError,
@@ -153,5 +155,86 @@ describe("signal client typed errors and retry", () => {
     expect(socketRequest).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(result).toEqual({ timestamp: 1700000000003 });
+  });
+
+  it("detects SSE mode when /api/v1/events responds 200", async () => {
+    const cancel = vi.fn(async () => {});
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      body: { cancel },
+    } as unknown as Response);
+
+    const mode = await detectSignalApiMode("http://signal.local");
+
+    expect(mode).toBe("sse");
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("falls back to jsonrpc mode when /api/v1/events is unavailable", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      body: null,
+    } as unknown as Response);
+
+    await expect(detectSignalApiMode("http://signal.local")).resolves.toBe("jsonrpc");
+  });
+
+  it("polls JSON-RPC receive and converts envelopes into receive events", async () => {
+    const events: Array<{ event?: string; data?: string }> = [];
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        text: JSON.stringify({
+          jsonrpc: "2.0",
+          result: [
+            { envelope: { sourceNumber: "+15550001111", dataMessage: { message: "hello" } } },
+            { envelope: { sourceNumber: "+15550002222", dataMessage: { message: "hi" } } },
+          ],
+        }),
+      }),
+    );
+
+    await pollSignalJsonRpc({
+      baseUrl: "http://signal.local",
+      account: "+15559990000",
+      onEvent: (event) => events.push(event),
+      pollTimeoutSec: 1,
+    });
+
+    expect(events).toHaveLength(2);
+    expect(events[0]).toEqual(
+      expect.objectContaining({
+        event: "receive",
+      }),
+    );
+    expect(JSON.parse(String(events[0]?.data))).toEqual(
+      expect.objectContaining({
+        envelope: expect.objectContaining({
+          sourceNumber: "+15550001111",
+        }),
+      }),
+    );
+    const request = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      params: Record<string, unknown>;
+    };
+    expect(request.params).toEqual(
+      expect.objectContaining({
+        account: "+15559990000",
+        timeout: 1,
+      }),
+    );
+  });
+
+  it("returns immediately from JSON-RPC polling when already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await pollSignalJsonRpc({
+      baseUrl: "http://signal.local",
+      abortSignal: controller.signal,
+      onEvent: () => {},
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

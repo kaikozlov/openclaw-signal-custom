@@ -28,6 +28,8 @@ export type SignalSseEvent = {
   id?: string;
 };
 
+export type SignalApiMode = "sse" | "jsonrpc";
+
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_RETRY_ATTEMPTS = 3;
 const DEFAULT_RETRY_MIN_DELAY_MS = 500;
@@ -490,6 +492,63 @@ export async function streamSignalEvents(params: {
   }
 
   flushEvent();
+}
+
+export async function detectSignalApiMode(
+  baseUrl: string,
+  timeoutMs = 3_000,
+): Promise<SignalApiMode> {
+  const normalized = normalizeBaseUrl(baseUrl);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${normalized}/api/v1/events`, {
+      method: "GET",
+      headers: { Accept: "text/event-stream" },
+      signal: controller.signal,
+    });
+    try {
+      await response.body?.cancel();
+    } catch {}
+    return response.ok ? "sse" : "jsonrpc";
+  } catch {
+    return "jsonrpc";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function pollSignalJsonRpc(params: {
+  baseUrl: string;
+  account?: string;
+  abortSignal?: AbortSignal;
+  onEvent: (event: SignalSseEvent) => void;
+  pollTimeoutSec?: number;
+}): Promise<void> {
+  if (params.abortSignal?.aborted) {
+    return;
+  }
+  const timeout = Math.max(1, Math.trunc(params.pollTimeoutSec ?? 10));
+  const rpcParams: Record<string, unknown> = { timeout };
+  if (params.account) {
+    rpcParams.account = params.account;
+  }
+  const results = await signalRpcRequest<unknown[]>("receive", rpcParams, {
+    baseUrl: params.baseUrl,
+    timeoutMs: (timeout + 5) * 1000,
+  });
+  if (!Array.isArray(results)) {
+    return;
+  }
+  for (const entry of results) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    params.onEvent({
+      event: "receive",
+      data: JSON.stringify(entry),
+    });
+  }
 }
 
 export async function signalRpcRequestWithRetry<T = unknown>(

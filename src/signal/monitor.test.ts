@@ -22,7 +22,7 @@ describe("signal monitor event handler", () => {
       expect(ctx.From).toBe("signal-custom:+15550001111");
       return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
     });
-    const recordInboundSession = vi.fn(async () => {});
+    const recordInboundSession = vi.fn(async (..._args: unknown[]) => {});
     const enqueueSystemEvent = vi.fn();
 
     setSignalRuntime({
@@ -148,6 +148,145 @@ describe("signal monitor event handler", () => {
     expect(recordInboundSession).toHaveBeenCalledOnce();
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("does not overwrite main-session routing when dmScope is isolated", async () => {
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async ({ ctx }: { ctx: Record<string, unknown> }) => {
+      expect(ctx.Provider).toBe("signal-custom");
+      return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+    });
+    const recordInboundSession = vi.fn(async () => {});
+
+    setSignalRuntime({
+      channel: {
+        routing: {
+          resolveAgentRoute: () => ({
+            agentId: "agent-1",
+            sessionKey: "signal-custom:peer:+15550001111",
+            mainSessionKey: "main-session-1",
+            accountId: "default",
+          }),
+        },
+        reply: {
+          formatInboundEnvelope: ({ body }: { body: string }) => body,
+          resolveEnvelopeFormatOptions: () => undefined,
+          finalizeInboundContext: (ctx: Record<string, unknown>) => ctx,
+          dispatchReplyWithBufferedBlockDispatcher,
+          resolveHumanDelayConfig: () => undefined,
+        },
+        session: {
+          resolveStorePath: () => "/tmp/store.json",
+          readSessionUpdatedAt: () => undefined,
+          recordInboundSession,
+        },
+        text: {
+          hasControlCommand: () => false,
+        },
+        debounce: {
+          resolveInboundDebounceMs: () => 0,
+          createInboundDebouncer: ({ onFlush }: { onFlush: (items: unknown[]) => Promise<void> }) => ({
+            enqueue: async (item: unknown) => {
+              await onFlush([item]);
+            },
+            flushKey: async () => {},
+          }),
+        },
+        mentions: {
+          buildMentionRegexes: () => [],
+          matchesMentionPatterns: () => false,
+        },
+        groups: {
+          resolveGroupPolicy: () => ({
+            allowed: false,
+            groupConfig: undefined,
+            defaultConfig: undefined,
+          }),
+          resolveRequireMention: () => false,
+        },
+        pairing: {
+          readAllowFromStore: async () => [],
+          upsertPairingRequest: async () => undefined,
+          buildPairingReply: () => "",
+        },
+      },
+      system: {
+        enqueueSystemEvent: vi.fn(),
+      },
+      media: {
+        mediaKindFromMime: () => undefined,
+      },
+      logging: {
+        shouldLogVerbose: () => false,
+        getChildLogger: () =>
+          ({
+            info: () => {},
+            warn: () => {},
+            error: () => {},
+          }),
+      },
+    } as never);
+
+    const handler = createSignalEventHandler({
+      runtime: {
+        log: () => {},
+        error: () => {},
+        exit: () => {},
+      },
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15559990000",
+          },
+        },
+        session: {
+          dmScope: "per-channel-peer",
+        },
+      } as never,
+      baseUrl: "http://signal.local",
+      account: "+15559990000",
+      accountId: "default",
+      historyLimit: 0,
+      groupHistories: new Map(),
+      textLimit: 4000,
+      dmPolicy: "open",
+      allowFrom: ["*"],
+      groupAllowFrom: [],
+      groupPolicy: "allowlist",
+      reactionMode: "own",
+      reactionAllowlist: [],
+      mediaMaxBytes: 8 * 1024 * 1024,
+      ignoreAttachments: false,
+      sendReadReceipts: false,
+      readReceiptsViaDaemon: false,
+      fetchAttachment: async () => null,
+      deliverReplies: async () => {},
+      resolveSignalReactionTargets: () => [],
+      isSignalReactionMessage: isReactionMessage,
+      shouldEmitSignalReactionNotification: () => false,
+      buildSignalReactionSystemEventText: () => "",
+    });
+
+    await handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Kai",
+          timestamp: 1700000000000,
+          dataMessage: {
+            message: "hello",
+          },
+        },
+      }),
+    });
+
+    expect(recordInboundSession).toHaveBeenCalledOnce();
+    const firstRecordCall = (recordInboundSession.mock.calls as unknown[][]).at(0);
+    expect(
+      (firstRecordCall?.[0] as { updateLastRoute?: Record<string, unknown> } | undefined)
+        ?.updateLastRoute,
+    ).toBeUndefined();
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
   });
 
   it("routes reaction-only inbound through system events", async () => {
