@@ -61,6 +61,7 @@
 - [x] Port `configPath` support for signal-cli daemon startup (`#27771`)
 - [x] Port stock-host-reachable poll create support and explicit `unsend` gating (`#15994`, partial)
 - [x] Port richer inbound metadata preservation bundle (`#15956`)
+- [x] Port typing-stop callback for reply cleanup (`#26932`)
 - [ ] Review remaining lower-priority candidate (`#16085`)
 
 ## Rules

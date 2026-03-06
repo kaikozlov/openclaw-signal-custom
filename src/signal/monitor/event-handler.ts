@@ -574,6 +574,24 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           error: err,
         });
       },
+      stop: async () => {
+        if (!ctxPayload.To) {
+          return;
+        }
+        await sendTypingSignal(ctxPayload.To, {
+          cfg: deps.cfg,
+          accountId: deps.accountId,
+          stop: true,
+        });
+      },
+      onStopError: (err) => {
+        logTypingFailure({
+          log: logVerbose,
+          channel: SIGNAL_CHANNEL_ID,
+          target: ctxPayload.To ?? undefined,
+          error: err,
+        });
+      },
     });
 
     const { queuedFinal } =

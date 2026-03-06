@@ -67,8 +67,8 @@ Still not fully hardened:
 Current PR-backed port count:
 
 - your PRs ported: `12`
-- other Signal PRs ported: `24`
-- total PR-backed ports integrated: `36`
+- other Signal PRs ported: `25`
+- total PR-backed ports integrated: `37`
 
 Your PR set now integrated here:
 
@@ -111,6 +111,7 @@ Additional open Signal PRs already ported here:
 - #35600
 - #35490
 - #15956
+- #26932
 
 Reviewed and regression-covered here without code changes:
 
@@ -198,6 +199,7 @@ These are the remaining open Signal PRs that look materially useful for `signal-
 - `#27771`: `configPath` is now supported and passed through as `signal-cli --config ...` on local daemon startup
 - `#15994` (partial): stock-host-reachable poll creation now uses local `sendPollCreate`, and `unsend` now has its own action gate
 - `#15956`: richer inbound metadata is now preserved locally, including text styles, link previews, contacts, stickers, polls, attachment captions/dimensions, edit targets, and non-lossy edit-aware debounce behavior
+- `#26932`: reply cleanup now sends an explicit Signal typing-stop RPC so typing indicators do not linger after completion
 - `#6591`: parallel attachment fetch behavior is covered locally, but the PR's extra UX/quote formatting pieces are not yet ported
 
 ### Lower-Priority Candidates
