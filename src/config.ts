@@ -94,6 +94,7 @@ export type SignalAccountConfig = {
   capabilities?: string[];
   markdown?: unknown;
   configWrites?: boolean;
+  ackReaction?: string;
   enabled?: boolean;
   account?: string;
   accountUuid?: string;
@@ -202,6 +203,7 @@ export const SignalAccountSchemaBase = z
     name: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
     markdown: MarkdownConfigSchema,
+    ackReaction: z.string().optional(),
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
     account: z.string().optional(),

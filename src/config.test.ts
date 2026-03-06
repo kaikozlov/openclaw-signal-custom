@@ -15,6 +15,7 @@ describe("signal-custom config", () => {
     const parsed = SignalConfigSchema.safeParse({
       account: "+15550001111",
       httpUrl: "http://signal.local",
+      ackReaction: "👀",
       tcpHost: "127.0.0.1",
       tcpPort: 7583,
       sseIdleTimeoutMs: 0,

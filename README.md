@@ -21,12 +21,12 @@ What is standalone today:
 - config/account resolution
 - onboarding/setup
 - outbound sends
-- reactions, stickers, edit/delete, silent send
+- reactions, ACK reactions, stickers, edit/delete, silent send
 - directory/group lookup and group-management actions
 - retry + TCP socket transport
 - local daemon startup
 - local status probe
-- local monitor/inbound event handling
+- local monitor/inbound event handling, including JSON-RPC receive fallback
 - gateway startup wired to the local monitor
 
 What still remains after the standalone baseline:

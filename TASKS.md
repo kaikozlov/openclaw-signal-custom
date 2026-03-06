@@ -56,7 +56,7 @@
 - [x] Port identity/reaction compatibility fixes (`#10958`, `#17818`, `#17453`, `#31347`)
 - [x] Port DM route isolation fix for `session.dmScope=per-channel-peer` (`#31739`)
 - [x] Port native JSON-RPC WebSocket receive loop (`#19398`)
-- [ ] Implement `reactionLevel: "ack"` behavior (`#31078`)
+- [x] Implement `reactionLevel: "ack"` behavior (`#31078`)
 - [ ] Review lower-priority candidates (`#8767`, `#27771`, `#15994`, `#15956`, `#16085`)
 
 ## Rules

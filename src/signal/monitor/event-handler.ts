@@ -30,6 +30,7 @@ import {
 import { recordSignalReactionTarget } from "../reaction-target-cache.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
+import { maybeSendSignalAckReaction } from "./ack-reaction.js";
 import type {
   SignalDataMessage,
   SignalEnvelope,
@@ -1005,6 +1006,30 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         },
       });
       return;
+    }
+
+    const ackTimestamp =
+      resolveSignalEventTimestamp(envelope.timestamp) ??
+      resolveSignalEventTimestamp(dataMessage.timestamp);
+    const hasEarlyBody =
+      Boolean(messageText || quoteText) ||
+      Boolean(!deps.ignoreAttachments && dataMessage.attachments?.length);
+    if (hasEarlyBody && ackTimestamp) {
+      maybeSendSignalAckReaction({
+        cfg: deps.cfg,
+        agentId: route.agentId,
+        sender,
+        targetTimestamp: ackTimestamp,
+        isGroup,
+        groupId,
+        wasMentioned: effectiveWasMentioned,
+        canDetectMention,
+        requireMention: Boolean(requireMention),
+        accountId: deps.accountId,
+        onError: (err) => {
+          logVerbose(`Signal ack reaction failed: ${String(err)}`);
+        },
+      });
     }
 
     let mediaPath: string | undefined;
