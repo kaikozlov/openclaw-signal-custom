@@ -25,12 +25,22 @@ function clampBounds(start: number, length: number, textLength: number) {
   return { start: safeStart, end: safeEnd };
 }
 
-export function renderSignalMentions(message: string, mentions?: SignalMention[] | null) {
+export type SignalMentionRenderResult = {
+  text: string;
+  // Map original mention end offsets to the expansion length delta.
+  offsetShifts: Map<number, number>;
+};
+
+export function renderSignalMentions(
+  message: string,
+  mentions?: SignalMention[] | null,
+): SignalMentionRenderResult {
   if (!message || !mentions?.length) {
-    return message;
+    return { text: message, offsetShifts: new Map() };
   }
 
   let normalized = message;
+  const offsetShifts = new Map<number, number>();
   const candidates = mentions
     .filter(isValidMention)
     .slice()
@@ -52,8 +62,13 @@ export function renderSignalMentions(message: string, mentions?: SignalMention[]
       continue;
     }
 
-    normalized = normalized.slice(0, start) + `@${identifier}` + normalized.slice(end);
+    const replacement = `@${identifier}`;
+    const shift = replacement.length - (end - start);
+    normalized = normalized.slice(0, start) + replacement + normalized.slice(end);
+    if (shift !== 0) {
+      offsetShifts.set(end, (offsetShifts.get(end) ?? 0) + shift);
+    }
   }
 
-  return normalized;
+  return { text: normalized, offsetShifts };
 }

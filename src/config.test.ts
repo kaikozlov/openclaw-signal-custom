@@ -20,6 +20,8 @@ describe("signal-custom config", () => {
       tcpHost: "127.0.0.1",
       tcpPort: 7583,
       sseIdleTimeoutMs: 0,
+      injectLinkPreviews: true,
+      preserveTextStyles: true,
       retry: {
         attempts: 2,
         minDelayMs: 0,

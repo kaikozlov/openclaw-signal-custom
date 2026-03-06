@@ -517,7 +517,7 @@ describe("signal monitor edge cases", () => {
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
-  it("emits system events for edit/delete/pin/unpin control envelopes", async () => {
+  it("dispatches contentful edits but keeps delete/pin/unpin as system events", async () => {
     const { dispatchReplyWithBufferedBlockDispatcher, enqueueSystemEvent } = installRuntime();
     const handler = createHandler();
 
@@ -582,9 +582,9 @@ describe("signal monitor edge cases", () => {
       }),
     });
 
-    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
     const texts = enqueueSystemEvent.mock.calls.map((call) => String(call[0]));
-    expect(texts.some((text) => text.includes("Signal message edited:"))).toBe(true);
+    expect(texts.some((text) => text.includes("Signal message edited:"))).toBe(false);
     expect(texts.some((text) => text.includes("Signal message deleted:"))).toBe(true);
     expect(texts.some((text) => text.includes("Signal message pinned:"))).toBe(true);
     expect(texts.some((text) => text.includes("Signal message unpinned:"))).toBe(true);

@@ -36,12 +36,26 @@ export type SignalDataMessage = {
   timestamp?: number | string | null;
   message?: string | null;
   attachments?: Array<SignalAttachment>;
+  sticker?: SignalSticker | null;
+  previews?: Array<SignalLinkPreview> | null;
+  textStyles?: Array<SignalTextStyleRange> | null;
   mentions?: Array<SignalMention> | null;
+  contacts?: Array<SignalSharedContact> | null;
+  pollCreate?: SignalPollCreate | null;
+  pollVote?: SignalPollVote | null;
+  pollTerminate?: SignalPollTerminate | null;
   groupInfo?: {
     groupId?: string | null;
     groupName?: string | null;
   } | null;
-  quote?: { id?: number | null; author?: string | null; text?: string | null } | null;
+  quote?: {
+    id?: number | string | null;
+    timestamp?: number | null;
+    text?: string | null;
+    authorUuid?: string | null;
+    authorNumber?: string | null;
+    author?: string | null;
+  } | null;
   reaction?: SignalReactionMessage | null;
   expiresInSeconds?: number | null;
   groupV2Change?: Record<string, unknown> | null;
@@ -88,7 +102,54 @@ export type SignalAttachment = {
   id?: string | null;
   contentType?: string | null;
   filename?: string | null;
+  caption?: string | null;
   size?: number | null;
+  width?: number | null;
+  height?: number | null;
+};
+
+export type SignalSticker = {
+  packId?: string | number | null;
+  stickerId?: string | number | null;
+  attachment?: SignalAttachment | null;
+};
+
+export type SignalLinkPreview = {
+  url?: string | null;
+  title?: string | null;
+  description?: string | null;
+  image?: SignalAttachment | null;
+};
+
+export type SignalTextStyleRange = {
+  style?: string | null;
+  start?: number | null;
+  length?: number | null;
+};
+
+export type SignalSharedContact = {
+  name?: { display?: string | null; given?: string | null; family?: string | null } | null;
+  phone?: Array<{ value?: string | null; type?: string | null }> | null;
+  email?: Array<{ value?: string | null; type?: string | null }> | null;
+  organization?: string | null;
+};
+
+export type SignalPollCreate = {
+  question?: string | null;
+  allowMultiple?: boolean | null;
+  options?: Array<string | { text?: string | null } | null> | null;
+};
+
+export type SignalPollVote = {
+  authorNumber?: string | null;
+  authorUuid?: string | null;
+  targetSentTimestamp?: number | null;
+  optionIndexes?: number[] | null;
+  voteCount?: number | null;
+};
+
+export type SignalPollTerminate = {
+  targetSentTimestamp?: number | null;
 };
 
 export type SignalReactionTarget = {
@@ -123,6 +184,8 @@ export type SignalEventHandlerDeps = {
   ignoreAttachments: boolean;
   sendReadReceipts: boolean;
   readReceiptsViaDaemon: boolean;
+  injectLinkPreviews?: boolean;
+  preserveTextStyles?: boolean;
   fetchAttachment: (params: {
     baseUrl: string;
     account?: string;

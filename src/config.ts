@@ -116,6 +116,8 @@ export type SignalAccountConfig = {
   receiveMode?: "on-start" | "manual";
   ignoreAttachments?: boolean;
   ignoreStories?: boolean;
+  injectLinkPreviews?: boolean;
+  preserveTextStyles?: boolean;
   sendReadReceipts?: boolean;
   dmPolicy?: DmPolicy;
   allowFrom?: Array<string | number>;
@@ -227,6 +229,8 @@ export const SignalAccountSchemaBase = z
     receiveMode: z.union([z.literal("on-start"), z.literal("manual")]).optional(),
     ignoreAttachments: z.boolean().optional(),
     ignoreStories: z.boolean().optional(),
+    injectLinkPreviews: z.boolean().optional(),
+    preserveTextStyles: z.boolean().optional(),
     sendReadReceipts: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),

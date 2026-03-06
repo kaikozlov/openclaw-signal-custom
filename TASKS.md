@@ -60,7 +60,8 @@
 - [x] Port `cliPath` validation before daemon spawn (`#8767`)
 - [x] Port `configPath` support for signal-cli daemon startup (`#27771`)
 - [x] Port stock-host-reachable poll create support and explicit `unsend` gating (`#15994`, partial)
-- [ ] Review remaining lower-priority candidates (`#15956`, `#16085`)
+- [x] Port richer inbound metadata preservation bundle (`#15956`)
+- [ ] Review remaining lower-priority candidate (`#16085`)
 
 ## Rules
 

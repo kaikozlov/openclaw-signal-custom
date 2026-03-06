@@ -28,6 +28,7 @@ What is standalone today:
 - local daemon startup
 - local status probe
 - local monitor/inbound event handling, including JSON-RPC receive fallback
+- richer inbound Signal context: styles, link previews, stickers, contacts, polls, quote/edit metadata, attachment captions/dimensions
 - gateway startup wired to the local monitor
 
 What still remains after the standalone baseline:

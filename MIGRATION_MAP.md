@@ -67,8 +67,8 @@ Still not fully hardened:
 Current PR-backed port count:
 
 - your PRs ported: `12`
-- other Signal PRs ported: `23`
-- total PR-backed ports integrated: `35`
+- other Signal PRs ported: `24`
+- total PR-backed ports integrated: `36`
 
 Your PR set now integrated here:
 
@@ -110,6 +110,7 @@ Additional open Signal PRs already ported here:
 - #35931
 - #35600
 - #35490
+- #15956
 
 Reviewed and regression-covered here without code changes:
 
@@ -196,12 +197,12 @@ These are the remaining open Signal PRs that look materially useful for `signal-
 - `#8767`: daemon startup now rejects unsafe `cliPath` values before spawning `signal-cli`
 - `#27771`: `configPath` is now supported and passed through as `signal-cli --config ...` on local daemon startup
 - `#15994` (partial): stock-host-reachable poll creation now uses local `sendPollCreate`, and `unsend` now has its own action gate
+- `#15956`: richer inbound metadata is now preserved locally, including text styles, link previews, contacts, stickers, polls, attachment captions/dimensions, edit targets, and non-lossy edit-aware debounce behavior
 - `#6591`: parallel attachment fetch behavior is covered locally, but the PR's extra UX/quote formatting pieces are not yet ported
 
 ### Lower-Priority Candidates
 
 - #15994: `pollVote` and `pollTerminate` remain blocked on stock host because those action names are not in the current OpenClaw release schema
-- #15956: broad inbound metadata preservation bundle
 - #16085: container REST-mode compatibility
 
 ### Reviewed But Not New Priority Work

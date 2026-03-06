@@ -744,6 +744,8 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       ignoreAttachments,
       sendReadReceipts,
       readReceiptsViaDaemon,
+      injectLinkPreviews: accountInfo.config.injectLinkPreviews,
+      preserveTextStyles: accountInfo.config.preserveTextStyles,
       fetchAttachment,
       deliverReplies: (params) => deliverReplies({ cfg, ...params, chunkMode }),
       resolveSignalReactionTargets,
