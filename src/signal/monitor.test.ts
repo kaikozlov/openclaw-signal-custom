@@ -64,6 +64,11 @@ describe("signal monitor event handler", () => {
           matchesMentionPatterns: () => false,
         },
         groups: {
+          resolveGroupPolicy: () => ({
+            allowed: false,
+            groupConfig: undefined,
+            defaultConfig: undefined,
+          }),
           resolveRequireMention: () => false,
         },
         pairing: {
@@ -185,6 +190,11 @@ describe("signal monitor event handler", () => {
           matchesMentionPatterns: () => false,
         },
         groups: {
+          resolveGroupPolicy: () => ({
+            allowed: false,
+            groupConfig: undefined,
+            defaultConfig: undefined,
+          }),
           resolveRequireMention: () => false,
         },
         pairing: {

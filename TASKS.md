@@ -47,6 +47,18 @@
 - [x] Port defensive guard fixes (`#35931`, `#35600`, `#35490`)
 - [x] Review pairing/allowlist isolation fixes (`#26029`, `#26617`, `#26639`)
 
+## Phase 5: Remaining Open Signal PR Queue
+
+- [x] Port inbound multi-attachment support (`#30959`; `#6591` parallel fetch behavior covered locally)
+- [x] Port group-level allowlist support (`#29154`)
+- [x] Port mention-metadata fallback for `requireMention` (`#29345`)
+- [x] Port inbound + outbound native quote/reply support (`#24273`, `#36630`)
+- [x] Port identity/reaction compatibility fixes (`#10958`, `#17818`, `#17453`, `#31347`)
+- [ ] Port DM route isolation fix for `session.dmScope=per-channel-peer` (`#31739`)
+- [ ] Port native JSON-RPC WebSocket receive loop (`#19398`)
+- [ ] Implement `reactionLevel: "ack"` behavior (`#31078`)
+- [ ] Review lower-priority candidates (`#8767`, `#27771`, `#15994`, `#15956`, `#16085`)
+
 ## Rules
 
 1. Copy first, shim second, rewrite last.

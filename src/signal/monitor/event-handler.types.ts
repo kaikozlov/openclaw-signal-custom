@@ -12,10 +12,14 @@ import type { SignalSender } from "../identity.js";
 export type SignalEnvelope = {
   sourceNumber?: string | null;
   sourceUuid?: string | null;
+  source?: string | null;
   sourceName?: string | null;
   timestamp?: number | null;
   dataMessage?: SignalDataMessage | null;
-  editMessage?: { dataMessage?: SignalDataMessage | null } | null;
+  editMessage?: {
+    targetSentTimestamp?: number | string | null;
+    dataMessage?: SignalDataMessage | null;
+  } | null;
   syncMessage?: unknown;
   reactionMessage?: SignalReactionMessage | null;
 };
@@ -29,7 +33,7 @@ export type SignalMention = {
 };
 
 export type SignalDataMessage = {
-  timestamp?: number;
+  timestamp?: number | string | null;
   message?: string | null;
   attachments?: Array<SignalAttachment>;
   mentions?: Array<SignalMention> | null;
@@ -37,19 +41,43 @@ export type SignalDataMessage = {
     groupId?: string | null;
     groupName?: string | null;
   } | null;
-  quote?: { text?: string | null } | null;
+  quote?: { id?: number | null; author?: string | null; text?: string | null } | null;
   reaction?: SignalReactionMessage | null;
   expiresInSeconds?: number | null;
   groupV2Change?: Record<string, unknown> | null;
   isExpirationUpdate?: boolean | null;
+  remoteDelete?: {
+    timestamp?: number | string | null;
+    targetSentTimestamp?: number | string | null;
+  } | null;
+  pinMessage?: (SignalTargetMessageRef & { pinDurationSeconds?: number | null }) | null;
+  unpinMessage?: SignalTargetMessageRef | null;
 };
 
-export type SignalReactionMessage = {
-  emoji?: string | null;
-  targetAuthor?: string | null;
+export type SignalTargetAuthorObject = {
+  number?: string | null;
+  e164?: string | null;
+  uuid?: string | null;
+  aci?: string | null;
+  serviceId?: string | null;
+};
+
+export type SignalTargetMessageRef = {
+  targetAuthor?: string | SignalTargetAuthorObject | null;
+  targetAuthorNumber?: string | null;
+  targetAuthorE164?: string | null;
+  targetAuthorPhone?: string | null;
   targetAuthorUuid?: string | null;
-  targetSentTimestamp?: number | null;
+  targetAuthorAci?: string | null;
+  targetAuthorServiceId?: string | null;
+  targetAuthorId?: string | null;
+  targetSentTimestamp?: number | string | null;
+};
+
+export type SignalReactionMessage = SignalTargetMessageRef & {
+  emoji?: string | null;
   isRemove?: boolean | null;
+  remove?: boolean | null;
   groupInfo?: {
     groupId?: string | null;
     groupName?: string | null;
@@ -112,6 +140,7 @@ export type SignalEventHandlerDeps = {
     runtime: RuntimeEnv;
     maxBytes: number;
     textLimit: number;
+    quoteAuthor?: string;
   }) => Promise<void>;
   resolveSignalReactionTargets: (reaction: SignalReactionMessage) => SignalReactionTarget[];
   isSignalReactionMessage: (

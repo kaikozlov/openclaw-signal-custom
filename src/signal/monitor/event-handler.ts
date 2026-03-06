@@ -7,6 +7,7 @@ import {
   formatInboundFromLabel,
   logInboundDrop,
   logTypingFailure,
+  normalizeE164,
   recordPendingHistoryEntryIfEnabled,
   resolveControlCommandGate,
   resolveMentionGatingWithBypass,
@@ -26,11 +27,14 @@ import {
   resolveSignalSender,
   type SignalSender,
 } from "../identity.js";
+import { recordSignalReactionTarget } from "../reaction-target-cache.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
 import type {
+  SignalDataMessage,
   SignalEnvelope,
   SignalEventHandlerDeps,
+  SignalMention,
   SignalReactionMessage,
   SignalReceivePayload,
 } from "./event-handler.types.js";
@@ -58,6 +62,38 @@ function resolvePinnedMainDmOwnerFromAllowlist(params: {
   return normalizedOwners.length === 1 ? normalizedOwners[0] : null;
 }
 
+function hasMentionTargetMetadata(mentions: SignalMention[] | null | undefined): boolean {
+  return Boolean(
+    mentions?.some((mention) => {
+      const uuid = typeof mention?.uuid === "string" ? mention.uuid.trim() : "";
+      const number = typeof mention?.number === "string" ? mention.number.trim() : "";
+      return Boolean(uuid || number);
+    }),
+  );
+}
+
+function isMentionedBySignalMetadata(params: {
+  mentions: SignalMention[] | null | undefined;
+  account?: string;
+  accountUuid?: string;
+}): boolean {
+  const accountNumber = params.account?.trim();
+  const accountUuid = params.accountUuid?.trim().toLowerCase();
+  const normalizedAccountE164 = accountNumber ? normalizeE164(accountNumber) : "";
+  return Boolean(
+    params.mentions?.some((mention) => {
+      const mentionNumberRaw = typeof mention?.number === "string" ? mention.number.trim() : "";
+      if (mentionNumberRaw && normalizedAccountE164) {
+        if (normalizeE164(mentionNumberRaw) === normalizedAccountE164) {
+          return true;
+        }
+      }
+      const mentionUuid = typeof mention?.uuid === "string" ? mention.uuid.trim().toLowerCase() : "";
+      return Boolean(accountUuid && mentionUuid && mentionUuid === accountUuid);
+    }),
+  );
+}
+
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   type SignalInboundEntry = {
     senderName: string;
@@ -73,8 +109,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     messageId?: string;
     mediaPath?: string;
     mediaType?: string;
+    mediaPaths?: string[];
+    mediaTypes?: string[];
     commandAuthorized: boolean;
     wasMentioned?: boolean;
+    replyToId?: string;
+    replyToBody?: string;
+    replyToSender?: string;
   };
 
   const pluginRuntime = getSignalRuntime();
@@ -179,10 +220,17 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       MediaPath: entry.mediaPath,
       MediaType: entry.mediaType,
       MediaUrl: entry.mediaPath,
+      MediaPaths: entry.mediaPaths,
+      MediaTypes: entry.mediaTypes,
+      MediaUrls: entry.mediaPaths,
       WasMentioned: entry.isGroup ? entry.wasMentioned === true : undefined,
       CommandAuthorized: entry.commandAuthorized,
       OriginatingChannel: SIGNAL_CHANNEL_ID,
       OriginatingTo: signalTo,
+      ReplyToId: entry.replyToId,
+      ReplyToBody: entry.replyToBody,
+      ReplyToSender: entry.replyToSender,
+      ReplyToIsQuote: entry.replyToBody ? true : undefined,
     });
 
     await pluginRuntime.channel.session.recordInboundSession({
@@ -270,11 +318,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
               baseUrl: deps.baseUrl,
               account: deps.account,
               accountId: deps.accountId,
-              runtime: deps.runtime,
-              maxBytes: deps.mediaMaxBytes,
-              textLimit: deps.textLimit,
-            });
-          },
+          runtime: deps.runtime,
+          maxBytes: deps.mediaMaxBytes,
+          textLimit: deps.textLimit,
+          quoteAuthor: entry.senderRecipient || undefined,
+        });
+      },
           onError: (err, info) => {
             deps.runtime.error?.(`signal ${info.kind} reply failed: ${String(err)}`);
           },
@@ -319,7 +368,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return shouldDebounceTextInbound({
         text: entry.bodyText,
         cfg: deps.cfg,
-        hasMedia: Boolean(entry.mediaPath || entry.mediaType),
+        hasMedia: Boolean(entry.mediaPath || entry.mediaType || entry.mediaPaths?.length),
       });
     },
     onFlush: async (entries) => {
@@ -343,6 +392,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         bodyText: combinedText,
         mediaPath: undefined,
         mediaType: undefined,
+        mediaPaths: undefined,
+        mediaTypes: undefined,
       });
     },
     onError: (err) => {
@@ -364,7 +415,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     if (params.hasBodyContent) {
       return false;
     }
-    if (params.reaction.isRemove) {
+    if (params.reaction.isRemove === true || params.reaction.remove === true) {
       return true;
     }
     const emojiLabel = params.reaction.emoji?.trim() || "emoji";
@@ -428,6 +479,166 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       contextKey,
     });
     return true;
+  }
+
+  function resolveSignalEventTimestamp(value: number | string | null | undefined): number | null {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      return value;
+    }
+    if (typeof value !== "string") {
+      return null;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  function buildSignalControlSystemEventText(params: {
+    actionLabel: "edited" | "deleted" | "pinned" | "unpinned";
+    actorLabel: string;
+    messageId: string;
+    groupLabel?: string;
+    previewText?: string;
+  }): string {
+    const base = `Signal message ${params.actionLabel}: by ${params.actorLabel} msg ${params.messageId}`;
+    const withGroup = params.groupLabel ? `${base} in ${params.groupLabel}` : base;
+    return params.previewText ? `${withGroup} text="${params.previewText}"` : withGroup;
+  }
+
+  function handleSignalControlOnlyInbound(params: {
+    envelope: SignalEnvelope;
+    sender: SignalSender;
+    senderDisplay: string;
+    senderPeerId: string;
+    dataMessage?: SignalDataMessage | null;
+    messageText: string;
+    quoteText: string;
+    isGroup: boolean;
+    groupId?: string;
+    groupName?: string;
+  }): boolean {
+    const remoteDeleteTimestamp = resolveSignalEventTimestamp(
+      params.dataMessage?.remoteDelete?.timestamp ??
+        params.dataMessage?.remoteDelete?.targetSentTimestamp,
+    );
+    const pinTimestamp = resolveSignalEventTimestamp(
+      params.dataMessage?.pinMessage?.targetSentTimestamp,
+    );
+    const unpinTimestamp = resolveSignalEventTimestamp(
+      params.dataMessage?.unpinMessage?.targetSentTimestamp,
+    );
+    const editTimestamp = resolveSignalEventTimestamp(
+      params.envelope.editMessage?.targetSentTimestamp,
+    );
+    const hasEditEnvelope = Boolean(params.envelope.editMessage);
+
+    if (!hasEditEnvelope && !remoteDeleteTimestamp && !pinTimestamp && !unpinTimestamp) {
+      return false;
+    }
+
+    const senderName = params.envelope.sourceName ?? params.senderDisplay;
+    const route = pluginRuntime.channel.routing.resolveAgentRoute({
+      cfg: deps.cfg,
+      channel: SIGNAL_CHANNEL_ID,
+      accountId: deps.accountId,
+      peer: {
+        kind: params.isGroup ? "group" : "direct",
+        id: params.isGroup ? (params.groupId ?? "unknown") : params.senderPeerId,
+      },
+    });
+    const groupLabel = params.isGroup
+      ? `${params.groupName ?? "Signal Group"} id:${params.groupId}`
+      : undefined;
+    const senderId = formatSignalSenderId(params.sender);
+    const emitSystemEvent = (
+      kind: "edited" | "deleted" | "pinned" | "unpinned",
+      messageId: string,
+      text: string,
+    ) => {
+      const contextKey = [
+        SIGNAL_CHANNEL_ID,
+        "message",
+        kind,
+        messageId,
+        senderId,
+        params.groupId ?? "",
+      ]
+        .filter(Boolean)
+        .join(":");
+      pluginRuntime.system.enqueueSystemEvent(text, { sessionKey: route.sessionKey, contextKey });
+    };
+
+    if (remoteDeleteTimestamp) {
+      const messageId = String(remoteDeleteTimestamp);
+      emitSystemEvent(
+        "deleted",
+        messageId,
+        buildSignalControlSystemEventText({
+          actionLabel: "deleted",
+          actorLabel: senderName,
+          messageId,
+          groupLabel,
+        }),
+      );
+      return true;
+    }
+
+    if (pinTimestamp) {
+      const messageId = String(pinTimestamp);
+      emitSystemEvent(
+        "pinned",
+        messageId,
+        buildSignalControlSystemEventText({
+          actionLabel: "pinned",
+          actorLabel: senderName,
+          messageId,
+          groupLabel,
+        }),
+      );
+      return true;
+    }
+
+    if (unpinTimestamp) {
+      const messageId = String(unpinTimestamp);
+      emitSystemEvent(
+        "unpinned",
+        messageId,
+        buildSignalControlSystemEventText({
+          actionLabel: "unpinned",
+          actorLabel: senderName,
+          messageId,
+          groupLabel,
+        }),
+      );
+      return true;
+    }
+
+    if (hasEditEnvelope) {
+      const fallbackTimestamp =
+        resolveSignalEventTimestamp(params.dataMessage?.timestamp) ??
+        resolveSignalEventTimestamp(params.envelope.timestamp);
+      const messageId = String(editTimestamp ?? fallbackTimestamp ?? "unknown");
+      const previewSource = (params.messageText || params.quoteText || "").replace(/\s+/g, " ").trim();
+      const previewText =
+        previewSource.length > 140 ? `${previewSource.slice(0, 137)}...` : previewSource;
+      emitSystemEvent(
+        "edited",
+        messageId,
+        buildSignalControlSystemEventText({
+          actionLabel: "edited",
+          actorLabel: senderName,
+          messageId,
+          groupLabel,
+          previewText,
+        }),
+      );
+      return true;
+    }
+
+    return false;
   }
 
   return async (event: { event?: string; data?: string }) => {
@@ -497,8 +708,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       const senderDisplayBare = formatSignalSenderDisplay(sender);
       const emojiLabel =
         typeof bareReaction.emoji === "string" ? bareReaction.emoji.trim() || "emoji" : "emoji";
-      const isRemove = Boolean(bareReaction.isRemove);
-      const targetTimestamp = bareReaction.targetSentTimestamp;
+      const isRemove = bareReaction.isRemove === true || bareReaction.remove === true;
+      const targetTimestamp = resolveSignalEventTimestamp(bareReaction.targetSentTimestamp);
       logVerbose(`signal: bare reaction (${emojiLabel}) from ${senderDisplayBare}`);
       if (!isRemove) {
         const groupId = bareReaction.groupInfo?.groupId ?? dataMessage?.groupInfo?.groupId ?? undefined;
@@ -535,7 +746,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             id: isGroup ? (groupId ?? "unknown") : senderPeerIdBare,
           },
         });
-        const messageId = typeof targetTimestamp === "number" ? String(targetTimestamp) : "unknown";
+        const messageId = targetTimestamp ? String(targetTimestamp) : "unknown";
         const groupLabel = isGroup ? `${groupName ?? "Signal Group"} id:${groupId}` : undefined;
         const text = deps.buildSignalReactionSystemEventText({
           emojiLabel,
@@ -592,6 +803,18 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const groupId = dataMessage.groupInfo?.groupId ?? undefined;
     const groupName = dataMessage.groupInfo?.groupName ?? undefined;
     const isGroup = Boolean(groupId);
+    const channelGroupPolicy = isGroup
+      ? pluginRuntime.channel.groups.resolveGroupPolicy({
+          cfg: deps.cfg,
+          channel: SIGNAL_CHANNEL_ID,
+          groupId,
+          accountId: deps.accountId,
+          hasGroupAllowFrom: deps.groupAllowFrom.length > 0,
+        })
+      : undefined;
+    const groupExplicitlyAllowed = Boolean(
+      channelGroupPolicy?.allowed && (channelGroupPolicy.groupConfig || channelGroupPolicy.defaultConfig),
+    );
 
     const isTimerUpdate =
       !messageText &&
@@ -630,17 +853,46 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }
     }
     if (isGroup) {
-      const groupAccess = resolveAccessDecision(true);
-      if (groupAccess.decision !== "allow") {
-        if (groupAccess.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_DISABLED) {
-          logVerbose("Blocked signal group message (groupPolicy: disabled)");
-        } else if (groupAccess.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_EMPTY_ALLOWLIST) {
-          logVerbose("Blocked signal group message (groupPolicy: allowlist, no groupAllowFrom)");
-        } else {
-          logVerbose(`Blocked signal group sender ${senderDisplay} (not in groupAllowFrom)`);
+      if (!channelGroupPolicy?.allowed) {
+        const groupAccess = resolveAccessDecision(true);
+        if (groupAccess.decision !== "allow") {
+          if (groupAccess.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_DISABLED) {
+            logVerbose("Blocked signal group message (groupPolicy: disabled)");
+          } else if (
+            groupAccess.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_EMPTY_ALLOWLIST
+          ) {
+            logVerbose("Blocked signal group message (groupPolicy: allowlist, no groupAllowFrom)");
+          } else {
+            logVerbose(`Blocked signal group sender ${senderDisplay} (not in groupAllowFrom)`);
+          }
+          return;
         }
-        return;
+      } else if (deps.groupAllowFrom.length > 0) {
+        const groupAccess = resolveAccessDecision(true);
+        if (groupAccess.decision !== "allow") {
+          logVerbose(
+            `Blocked signal group sender ${senderDisplay} (group allowed, sender not in groupAllowFrom)`,
+          );
+          return;
+        }
       }
+    }
+
+    if (
+      handleSignalControlOnlyInbound({
+        envelope,
+        sender,
+        senderDisplay,
+        senderPeerId,
+        dataMessage,
+        messageText,
+        quoteText,
+        isGroup,
+        groupId,
+        groupName,
+      })
+    ) {
+      return;
     }
 
     const useAccessGroups = deps.cfg.commands?.useAccessGroups !== false;
@@ -656,6 +908,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       authorizers: [
         { configured: commandDmAllow.length > 0, allowed: ownerAllowedForCommands },
         { configured: effectiveGroupAllow.length > 0, allowed: groupAllowedForCommands },
+        { configured: groupExplicitlyAllowed, allowed: groupExplicitlyAllowed },
       ],
       allowTextCommands: true,
       hasControlCommand: hasControlCommandInMessage,
@@ -688,6 +941,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       messageText,
       mentionRegexes,
     );
+    const mentionMetadata = dataMessage.mentions ?? undefined;
+    const hasMentionMetadata = hasMentionTargetMetadata(mentionMetadata);
+    const wasMentionedByMetadata =
+      isGroup &&
+      isMentionedBySignalMetadata({
+        mentions: mentionMetadata,
+        account: deps.account,
+        accountUuid: deps.accountUuid,
+      });
     const requireMention =
       isGroup &&
       pluginRuntime.channel.groups.resolveRequireMention({
@@ -696,14 +958,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         groupId,
         accountId: deps.accountId,
       });
-    const canDetectMention = mentionRegexes.length > 0;
+    const canDetectMention = mentionRegexes.length > 0 || Boolean(deps.account || deps.accountUuid);
     const mentionGate = resolveMentionGatingWithBypass({
       isGroup,
       requireMention: Boolean(requireMention),
       canDetectMention,
       wasMentioned,
-      implicitMention: false,
-      hasAnyMention: false,
+      implicitMention: wasMentionedByMetadata,
+      hasAnyMention: hasMentionMetadata,
       allowTextCommands: true,
       hasControlCommand: hasControlCommandInMessage,
       commandAuthorized,
@@ -747,24 +1009,49 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
 
     let mediaPath: string | undefined;
     let mediaType: string | undefined;
+    const mediaPaths: string[] = [];
+    const mediaTypes: string[] = [];
     let placeholder = "";
-    const firstAttachment = dataMessage.attachments?.[0];
-    if (firstAttachment?.id && !deps.ignoreAttachments) {
-      try {
-        const fetched = await deps.fetchAttachment({
-          baseUrl: deps.baseUrl,
-          account: deps.account,
-          attachment: firstAttachment,
-          sender: senderRecipient,
-          groupId,
-          maxBytes: deps.mediaMaxBytes,
-        });
-        if (fetched) {
-          mediaPath = fetched.path;
-          mediaType = fetched.contentType ?? firstAttachment.contentType ?? undefined;
+    const attachments = dataMessage.attachments ?? [];
+    if (attachments.length > 0 && !deps.ignoreAttachments) {
+      const fetchedAttachments = await Promise.all(
+        attachments
+          .filter((attachment) => attachment?.id)
+          .map(async (attachment) => {
+            try {
+              const fetched = await deps.fetchAttachment({
+                baseUrl: deps.baseUrl,
+                account: deps.account,
+                attachment,
+                sender: senderRecipient,
+                groupId,
+                maxBytes: deps.mediaMaxBytes,
+              });
+              if (!fetched) {
+                return null;
+              }
+              return {
+                path: fetched.path,
+                contentType: fetched.contentType ?? attachment.contentType ?? undefined,
+              };
+            } catch (err) {
+              deps.runtime.error?.(`attachment fetch failed: ${String(err)}`);
+              return null;
+            }
+          }),
+      );
+      for (const fetched of fetchedAttachments) {
+        if (!fetched) {
+          continue;
         }
-      } catch (err) {
-        deps.runtime.error?.(`attachment fetch failed: ${String(err)}`);
+        mediaPaths.push(fetched.path);
+        if (fetched.contentType) {
+          mediaTypes.push(fetched.contentType);
+        }
+        if (!mediaPath) {
+          mediaPath = fetched.path;
+          mediaType = fetched.contentType;
+        }
       }
     }
 
@@ -807,6 +1094,18 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const senderName = envelope.sourceName ?? senderDisplay;
     const messageId =
       typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined;
+    const quoteId =
+      typeof dataMessage.quote?.id === "number" ? String(dataMessage.quote.id) : undefined;
+    const quoteBody = dataMessage.quote?.text?.trim() || undefined;
+    const quoteAuthor = dataMessage.quote?.author?.trim() || undefined;
+    if (isGroup && groupId && messageId) {
+      recordSignalReactionTarget({
+        groupId,
+        messageId,
+        senderId: senderPeerId,
+        senderE164: sender.kind === "phone" ? sender.e164 : undefined,
+      });
+    }
     await inboundDebouncer.enqueue({
       senderName,
       senderDisplay,
@@ -821,8 +1120,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       messageId,
       mediaPath,
       mediaType,
+      mediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
+      mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
       commandAuthorized,
       wasMentioned: effectiveWasMentioned,
+      replyToId: quoteId,
+      replyToBody: quoteBody,
+      replyToSender: quoteAuthor,
     });
   };
 }

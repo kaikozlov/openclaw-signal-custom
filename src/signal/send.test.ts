@@ -5,7 +5,11 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setSignalRuntime } from "../runtime.js";
 import { resetSignalSocketRegistryForTests } from "./client.js";
-import { sendMessageSignal } from "./send.js";
+import {
+  __clearSignalReactionTargetCacheForTests,
+  recordSignalReactionTarget,
+} from "./reaction-target-cache.js";
+import { parseQuoteTimestamp, sendMessageSignal } from "./send.js";
 
 function makeResponse(params: {
   status?: number;
@@ -33,6 +37,7 @@ describe("sendMessageSignal", () => {
   afterEach(() => {
     global.fetch = originalFetch;
     resetSignalSocketRegistryForTests();
+    __clearSignalReactionTargetCacheForTests();
   });
 
   it("formats markdown text and forwards silent mentions over HTTP", async () => {
@@ -143,5 +148,166 @@ describe("sendMessageSignal", () => {
     } finally {
       await rm(mediaDir, { recursive: true, force: true });
     }
+  });
+
+  it("parses numeric quote timestamps and rejects invalid values", () => {
+    expect(parseQuoteTimestamp("1771479242643")).toBe(1771479242643);
+    expect(parseQuoteTimestamp("")).toBeUndefined();
+    expect(parseQuoteTimestamp("not-a-number")).toBeUndefined();
+    expect(parseQuoteTimestamp("-1")).toBeUndefined();
+  });
+
+  it("sends DM quote replies with quoteTimestamp even without quoteAuthor", async () => {
+    setSignalRuntime({
+      channel: {
+        text: {
+          resolveMarkdownTableMode: () => "off",
+        },
+      },
+    } as never);
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        text: JSON.stringify({
+          jsonrpc: "2.0",
+          result: { timestamp: 1700000004000 },
+        }),
+      }),
+    );
+
+    await sendMessageSignal("+15550006666", "reply", {
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15559990000",
+            httpUrl: "http://signal.local",
+          },
+        },
+      } as never,
+      replyTo: "1700000001234",
+    });
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      params: Record<string, unknown>;
+    };
+    expect(body.params).toEqual(
+      expect.objectContaining({
+        recipient: ["+15550006666"],
+        quoteTimestamp: 1700000001234,
+      }),
+    );
+    expect(body.params.quoteAuthor).toBeUndefined();
+  });
+
+  it("requires a quote author source before attaching group quote metadata", async () => {
+    setSignalRuntime({
+      channel: {
+        text: {
+          resolveMarkdownTableMode: () => "off",
+        },
+      },
+    } as never);
+    fetchMock
+      .mockResolvedValueOnce(
+        makeResponse({
+          text: JSON.stringify({
+            jsonrpc: "2.0",
+            result: { timestamp: 1700000005000 },
+          }),
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeResponse({
+          text: JSON.stringify({
+            jsonrpc: "2.0",
+            result: { timestamp: 1700000005001 },
+          }),
+        }),
+      );
+
+    await sendMessageSignal("group:grp-1", "group reply", {
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15559990000",
+            httpUrl: "http://signal.local",
+          },
+        },
+      } as never,
+      replyTo: "1700000001234",
+    });
+    await sendMessageSignal("group:grp-1", "group reply", {
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15559990000",
+            httpUrl: "http://signal.local",
+          },
+        },
+      } as never,
+      replyTo: "1700000001234",
+      quoteAuthor: "+15550001111",
+    });
+
+    const firstBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      params: Record<string, unknown>;
+    };
+    const secondBody = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body)) as {
+      params: Record<string, unknown>;
+    };
+    expect(firstBody.params.quoteTimestamp).toBeUndefined();
+    expect(firstBody.params.quoteAuthor).toBeUndefined();
+    expect(secondBody.params).toEqual(
+      expect.objectContaining({
+        groupId: "grp-1",
+        quoteTimestamp: 1700000001234,
+        quoteAuthor: "+15550001111",
+      }),
+    );
+  });
+
+  it("hydrates group quoteAuthor from the inbound target cache when available", async () => {
+    setSignalRuntime({
+      channel: {
+        text: {
+          resolveMarkdownTableMode: () => "off",
+        },
+      },
+    } as never);
+    recordSignalReactionTarget({
+      groupId: "grp-2",
+      messageId: "1700000002234",
+      senderId: "uuid:123e4567-e89b-12d3-a456-426614174000",
+    });
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        text: JSON.stringify({
+          jsonrpc: "2.0",
+          result: { timestamp: 1700000006000 },
+        }),
+      }),
+    );
+
+    await sendMessageSignal("group:grp-2", "cached group reply", {
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15559990000",
+            httpUrl: "http://signal.local",
+          },
+        },
+      } as never,
+      replyTo: "1700000002234",
+    });
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      params: Record<string, unknown>;
+    };
+    expect(body.params).toEqual(
+      expect.objectContaining({
+        groupId: "grp-2",
+        quoteTimestamp: 1700000002234,
+        quoteAuthor: "123e4567-e89b-12d3-a456-426614174000",
+      }),
+    );
   });
 });

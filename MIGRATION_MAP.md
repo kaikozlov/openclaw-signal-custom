@@ -43,7 +43,7 @@ Still not fully hardened:
 | WS2 | Outbound/action parity on `signal-custom` | #27104, #27107, #27108, #27145, #27146, #27148, #27149, #27169, #27171 | Done |
 | WS3 | RPC hardening + TCP transport on `signal-custom` | #27144, #27155 | Done |
 | WS4 | Standalone monitor/provider lifecycle | built-in Signal monitor stack | Done |
-| WS5 | Inbound hardening + external Signal PR watchlist | #34546, #28417, #31232, #32026, #33851, #34177, #35931, #35600, #35490, others | Probe + inbound + guard fixes done |
+| WS5 | Inbound hardening + external Signal PR watchlist | #34546, #28417, #31232, #32026, #33851, #34177, #35931, #35600, #35490, #24273, #36630, #10958, #17818, #17453, #31347, others | Probe + inbound + guard + quote/reply + reaction compatibility done |
 
 ## Your PR Matrix
 
@@ -67,8 +67,8 @@ Still not fully hardened:
 Current PR-backed port count:
 
 - your PRs ported: `12`
-- other Signal PRs ported: `9`
-- total PR-backed ports integrated: `21`
+- other Signal PRs ported: `18`
+- total PR-backed ports integrated: `30`
 
 Your PR set now integrated here:
 
@@ -87,6 +87,15 @@ Your PR set now integrated here:
 
 Additional open Signal PRs already ported here:
 
+- #30959
+- #29154
+- #29345
+- #24273
+- #36630
+- #10958
+- #17818
+- #17453
+- #31347
 - #33851
 - #34177
 - #34546
@@ -131,6 +140,67 @@ Why:
 Focus after the standalone baseline:
 
 1. watch for new Signal PRs that materially improve the standalone channel
+
+## Open Signal PR Review (2026-03-05)
+
+Review source:
+
+- `gh api /search/issues?q=repo:openclaw/openclaw+is:pr+is:open+label:"channel: signal"`
+
+Current snapshot:
+
+- open PRs with `channel: signal`: `75`
+- already accounted for here: `23`
+- remaining unported PRs reviewed: `52`
+
+### Priority Queue
+
+These are the remaining open Signal PRs that look materially useful for `signal-custom`.
+
+1. Native Signal quote/reply support
+   - PRs: #24273, #36630
+   - Reference: #20732
+   - Why: current plugin flattens inbound quote context and does not emit native outbound quote params
+2. Identity + reaction compatibility hardening
+   - PRs: #10958, #17818, #17453, #31347
+   - Why: current plugin still has UUID/source fallback gaps and incomplete newer reaction/control payload support
+3. DM route isolation
+   - PR: #31739
+   - Why: needed when `session.dmScope=per-channel-peer`
+4. Native `signal-cli` WebSocket receive loop
+   - PR: #19398
+   - Why: current plugin inbound monitor still depends on SSE `/api/v1/events`
+5. ACK reaction behavior
+   - PR: #31078
+   - Why: `reactionLevel: "ack"` exists in config but is not yet implemented
+
+### Newly Landed From This Review
+
+- `#30959`: inbound media arrays now preserve all fetched attachments
+- `#29154`: group-level allowlist support now flows through Signal group gating
+- `#29345`: `requireMention` now uses Signal mention metadata when regex patterns are absent
+- `#24273`: inbound Signal quote context now populates `ReplyToId`, `ReplyToBody`, `ReplyToSender`, and `ReplyToIsQuote`
+- `#36630`: local outbound replies now attach native Signal quote metadata on the first sent chunk/media item
+- `#10958`: UUID allowlist entries now match senders when Signal provides both `sourceNumber` and `sourceUuid`
+- `#17818`: legacy `source` sender fallback is now accepted for older Signal payloads
+- `#17453`: group reaction sends can now hydrate `targetAuthor`/`targetAuthorUuid` from a local inbound cache
+- `#31347`: newer reaction envelope shapes and edit/delete/pin/unpin control events are now handled locally
+- `#6591`: parallel attachment fetch behavior is covered locally, but the PR's extra UX/quote formatting pieces are not yet ported
+
+### Lower-Priority Candidates
+
+- #8767: validate `cliPath` before spawn
+- #27771: configurable Signal config path
+- #15994: unsend + poll lifecycle actions
+- #15956: broad inbound metadata preservation bundle
+- #16085: container REST-mode compatibility
+
+### Reviewed But Not New Priority Work
+
+- #25543 duplicates #29154 in practice
+- #26061 is effectively covered by current local probe behavior
+- #10709 is already covered by local JSON parse guards
+- hook/core-wide PRs remain useful upstream work, but they are not Signal-plugin-first tasks
 
 ## Hard Rule
 

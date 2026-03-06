@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { signalPlugin } from "./channel.js";
 import { setSignalRuntime } from "./runtime.js";
+import {
+  __clearSignalReactionTargetCacheForTests,
+  recordSignalReactionTarget,
+} from "./signal/reaction-target-cache.js";
 
 describe("signalPlugin outbound sendMedia", () => {
   it("declares blockStreaming and mention strip patterns", () => {
@@ -37,6 +41,66 @@ describe("signalPlugin outbound sendMedia", () => {
         accountId: "default",
       }),
     );
+  });
+
+  it("forwards replyToId on direct sendText adapter path", async () => {
+    const sendSignal = vi.fn(async (..._args: unknown[]) => ({ messageId: "m1" }));
+    const sendText = signalPlugin.outbound?.sendText;
+    if (!sendText) {
+      throw new Error("signal outbound sendText is unavailable");
+    }
+
+    await sendText({
+      cfg: {} as never,
+      to: "signal:+15551234567",
+      text: "replying",
+      replyToId: "1700000000000",
+      accountId: "default",
+      deps: { sendSignal },
+    });
+
+    expect(sendSignal).toHaveBeenCalledWith(
+      "signal:+15551234567",
+      "replying",
+      expect.objectContaining({
+        accountId: "default",
+        replyTo: "1700000000000",
+      }),
+    );
+  });
+
+  it("keeps payload replyToId only on the first outbound media send", async () => {
+    const sendSignal = vi.fn(async (..._args: unknown[]) => ({ messageId: "m1" }));
+    const sendPayload = signalPlugin.outbound?.sendPayload;
+    if (!sendPayload) {
+      throw new Error("signal outbound sendPayload is unavailable");
+    }
+
+    await sendPayload({
+      cfg: {} as never,
+      to: "signal:+15551234567",
+      payload: {
+        text: "album",
+        mediaUrls: ["https://example.com/a.jpg", "https://example.com/b.jpg"],
+        replyToId: "1700000000001",
+      },
+      accountId: "default",
+      deps: { sendSignal },
+    } as never);
+
+    expect(sendSignal).toHaveBeenCalledTimes(2);
+    expect((sendSignal.mock.calls[0]?.[2] as unknown)).toEqual(
+      expect.objectContaining({
+        mediaUrl: "https://example.com/a.jpg",
+        replyTo: "1700000000001",
+      }),
+    );
+    expect((sendSignal.mock.calls[1]?.[2] as unknown)).toEqual(
+      expect.objectContaining({
+        mediaUrl: "https://example.com/b.jpg",
+      }),
+    );
+    expect(((sendSignal.mock.calls[1]?.[2] as unknown as Record<string, unknown>).replyTo)).toBeUndefined();
   });
 
   it("resolves requireMention + tool policy from signal group config", () => {
@@ -103,7 +167,11 @@ describe("signalPlugin outbound sendMedia", () => {
         channel: "signal-custom",
         action: "react",
         cfg: {} as never,
-        params: {},
+        params: {
+          to: "signal:+15550001111",
+          messageId: "123",
+          emoji: "✅",
+        },
       } as never),
     ).rejects.toThrow(/targetAuthor|targetAuthorUuid/);
     expect(handleAction).not.toHaveBeenCalled();
@@ -178,6 +246,75 @@ describe("signalPlugin outbound sendMedia", () => {
         }),
       );
     } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it("hydrates group reaction target authors from the local reaction cache", async () => {
+    __clearSignalReactionTargetCacheForTests();
+    recordSignalReactionTarget({
+      groupId: "group-1",
+      messageId: "1700000000456",
+      senderId: "uuid:123e4567-e89b-12d3-a456-426614174000",
+    });
+
+    const handleAction = vi.fn(async (_ctx: unknown) => ({ content: [] }));
+    setSignalRuntime({
+      channel: {
+        signal: {
+          messageActions: {
+            handleAction,
+          },
+        },
+      },
+    } as never);
+
+    const originalFetch = global.fetch;
+    const fetchMock = vi.fn<typeof fetch>();
+    fetchMock.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      statusText: "OK",
+      text: async () =>
+        JSON.stringify({
+          jsonrpc: "2.0",
+          result: { timestamp: 1700000000100, results: [{ type: "SUCCESS" }] },
+        }),
+    } as Response);
+    global.fetch = fetchMock;
+    try {
+      await signalPlugin.actions?.handleAction?.({
+        channel: "signal-custom",
+        action: "react",
+        cfg: {
+          channels: {
+            "signal-custom": {
+              account: "+15550001111",
+              httpUrl: "http://signal.local",
+            },
+          },
+        } as never,
+        params: {
+          to: "signal:group:group-1",
+          messageId: "1700000000456",
+          emoji: "✅",
+        },
+      } as never);
+
+      expect(handleAction).not.toHaveBeenCalled();
+      const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+        params: Record<string, unknown>;
+      };
+      expect(body.params).toEqual(
+        expect.objectContaining({
+          groupIds: ["group-1"],
+          recipients: ["123e4567-e89b-12d3-a456-426614174000"],
+          targetAuthor: "123e4567-e89b-12d3-a456-426614174000",
+          targetTimestamp: 1700000000456,
+        }),
+      );
+    } finally {
+      __clearSignalReactionTargetCacheForTests();
       global.fetch = originalFetch;
     }
   });

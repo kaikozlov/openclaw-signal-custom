@@ -1,7 +1,7 @@
 import { normalizeE164 } from "openclaw/plugin-sdk";
 
 export type SignalSender =
-  | { kind: "phone"; raw: string; e164: string }
+  | { kind: "phone"; raw: string; e164: string; uuid?: string }
   | { kind: "uuid"; raw: string };
 
 type SignalAllowEntry =
@@ -30,13 +30,15 @@ function stripSignalPrefix(value: string): string {
 export function resolveSignalSender(params: {
   sourceNumber?: string | null;
   sourceUuid?: string | null;
+  source?: string | null;
 }): SignalSender | null {
-  const sourceNumber = params.sourceNumber?.trim();
+  const sourceNumber = (params.sourceNumber ?? params.source)?.trim();
   if (sourceNumber) {
     return {
       kind: "phone",
       raw: sourceNumber,
       e164: normalizeE164(sourceNumber),
+      uuid: params.sourceUuid?.trim() || undefined,
     };
   }
   const sourceUuid = params.sourceUuid?.trim();
@@ -117,8 +119,11 @@ export function isSignalSenderAllowed(sender: SignalSender, allowFrom: string[])
     if (entry.kind === "phone" && sender.kind === "phone") {
       return entry.e164 === sender.e164;
     }
-    if (entry.kind === "uuid" && sender.kind === "uuid") {
-      return entry.raw === sender.raw;
+    if (entry.kind === "uuid") {
+      if (sender.kind === "uuid") {
+        return entry.raw === sender.raw;
+      }
+      return sender.kind === "phone" && sender.uuid === entry.raw;
     }
     return false;
   });

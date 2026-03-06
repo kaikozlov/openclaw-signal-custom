@@ -56,6 +56,9 @@ import {
   type SignalSendOpts,
   type SignalSendResult,
 } from "./signal/send.js";
+import {
+  resolveSignalReactionTarget as resolveCachedSignalReactionTarget,
+} from "./signal/reaction-target-cache.js";
 import { removeReactionSignal, sendReactionSignal } from "./signal/send-reactions.js";
 import { listSignalContacts, listSignalGroups } from "./signal/directory.js";
 import {
@@ -314,12 +317,12 @@ const signalMessageActions: ChannelMessageActionAdapter = {
       if (!createSignalActionGate(actionConfig)("reactions")) {
         throw new Error("Signal reactions are disabled via actions.reactions.");
       }
-      validateAndNormalizeReactionParams({
+      normalizeReactionMessageIdAndEmoji({
         args: ctx.params,
         toolContext: ctx.toolContext,
       });
       const recipientRaw = readSignalRecipientParam(ctx.params);
-      const target = resolveSignalReactionTarget(recipientRaw);
+      const target = resolveSignalReactionDestination(recipientRaw);
       if (!target.recipient && !target.groupId) {
         throw new Error("recipient or group required");
       }
@@ -333,15 +336,18 @@ const signalMessageActions: ChannelMessageActionAdapter = {
         allowEmpty: false,
       });
       const remove = typeof ctx.params.remove === "boolean" ? ctx.params.remove : false;
-      const targetAuthor = readStringParam(ctx.params, "targetAuthor");
-      const targetAuthorUuid = readStringParam(ctx.params, "targetAuthorUuid");
+      const reactionAuthor = resolveReactionTargetAuthor({
+        args: ctx.params,
+        recipientRaw,
+        messageId: String(messageId),
+      });
       if (remove) {
         const result = await removeReactionSignal(target.recipient ?? "", timestamp, emoji, {
           cfg: ctx.cfg,
           accountId: ctx.accountId ?? undefined,
           groupId: target.groupId,
-          targetAuthor: targetAuthor ?? undefined,
-          targetAuthorUuid: targetAuthorUuid ?? undefined,
+          targetAuthor: reactionAuthor.targetAuthor,
+          targetAuthorUuid: reactionAuthor.targetAuthorUuid,
         });
         return jsonResult({ ok: true, removed: emoji, timestamp: result.timestamp });
       }
@@ -349,8 +355,8 @@ const signalMessageActions: ChannelMessageActionAdapter = {
         cfg: ctx.cfg,
         accountId: ctx.accountId ?? undefined,
         groupId: target.groupId,
-        targetAuthor: targetAuthor ?? undefined,
-        targetAuthorUuid: targetAuthorUuid ?? undefined,
+        targetAuthor: reactionAuthor.targetAuthor,
+        targetAuthorUuid: reactionAuthor.targetAuthorUuid,
       });
       return jsonResult({ ok: true, added: emoji, timestamp: result.timestamp });
     }
@@ -459,7 +465,7 @@ function normalizeSignalReactionAuthor(raw: string): string {
   return trimmed;
 }
 
-function resolveSignalReactionTarget(raw: string): { recipient?: string; groupId?: string } {
+function resolveSignalReactionDestination(raw: string): { recipient?: string; groupId?: string } {
   const trimmed = stripSignalChannelPrefix(raw);
   if (!trimmed) {
     return {};
@@ -483,26 +489,10 @@ function resolveReactionMessageId(params: {
   return params.toolContext?.currentMessageId;
 }
 
-function validateAndNormalizeReactionParams(params: {
+function normalizeReactionMessageIdAndEmoji(params: {
   args: Record<string, unknown>;
   toolContext?: ReactionToolContext;
 }) {
-  const targetAuthorRaw =
-    typeof params.args.targetAuthor === "string" ? params.args.targetAuthor : "";
-  const targetAuthorUuidRaw =
-    typeof params.args.targetAuthorUuid === "string" ? params.args.targetAuthorUuid : "";
-  const targetAuthor = normalizeSignalReactionAuthor(targetAuthorRaw);
-  const targetAuthorUuid = normalizeSignalReactionAuthor(targetAuthorUuidRaw);
-  if (!targetAuthor && !targetAuthorUuid) {
-    throw new Error("targetAuthor or targetAuthorUuid required for Signal reactions.");
-  }
-  if (targetAuthor) {
-    params.args.targetAuthor = targetAuthor;
-  }
-  if (targetAuthorUuid) {
-    params.args.targetAuthorUuid = targetAuthorUuid;
-  }
-
   const messageId = resolveReactionMessageId(params);
   if (messageId != null) {
     const timestamp = Number.parseInt(String(messageId), 10);
@@ -517,6 +507,49 @@ function validateAndNormalizeReactionParams(params: {
     throw new Error("Emoji required for Signal reactions.");
   }
   params.args.emoji = emoji;
+}
+
+function resolveReactionTargetAuthor(params: {
+  args: Record<string, unknown>;
+  recipientRaw: string;
+  messageId: string;
+}): { targetAuthor?: string; targetAuthorUuid?: string } {
+  const targetAuthorRaw =
+    typeof params.args.targetAuthor === "string" ? params.args.targetAuthor : "";
+  const targetAuthorUuidRaw =
+    typeof params.args.targetAuthorUuid === "string" ? params.args.targetAuthorUuid : "";
+  const targetAuthor = normalizeSignalReactionAuthor(targetAuthorRaw);
+  const targetAuthorUuid = normalizeSignalReactionAuthor(targetAuthorUuidRaw);
+  if (targetAuthor) {
+    params.args.targetAuthor = targetAuthor;
+  }
+  if (targetAuthorUuid) {
+    params.args.targetAuthorUuid = targetAuthorUuid;
+  }
+  if (targetAuthor || targetAuthorUuid) {
+    return {
+      targetAuthor: targetAuthor || undefined,
+      targetAuthorUuid: targetAuthorUuid || undefined,
+    };
+  }
+
+  const destination = resolveSignalReactionDestination(params.recipientRaw);
+  if (destination.groupId) {
+    const cachedTarget = resolveCachedSignalReactionTarget({
+      groupId: destination.groupId,
+      messageId: params.messageId,
+    });
+    if (cachedTarget?.targetAuthorUuid) {
+      params.args.targetAuthorUuid = cachedTarget.targetAuthorUuid;
+      return { targetAuthorUuid: cachedTarget.targetAuthorUuid };
+    }
+    if (cachedTarget?.targetAuthor) {
+      params.args.targetAuthor = cachedTarget.targetAuthor;
+      return { targetAuthor: cachedTarget.targetAuthor };
+    }
+  }
+
+  throw new Error("targetAuthor or targetAuthorUuid required for Signal reactions.");
 }
 
 function readSignalRecipientParam(params: Record<string, unknown>): string {
@@ -713,6 +746,8 @@ async function sendSignalOutbound(params: {
   mentions?: SignalMentionRange[];
   textMode?: SignalSendOpts["textMode"];
   textStyles?: SignalTextStyleRange[];
+  replyTo?: string;
+  quoteAuthor?: string;
   deps?: { sendSignal?: SignalSendFn };
 }) {
   const send = params.deps?.sendSignal ?? sendMessageSignal;
@@ -731,6 +766,8 @@ async function sendSignalOutbound(params: {
     accountId: params.accountId ?? undefined,
     ...(params.textMode ? { textMode: params.textMode } : {}),
     ...(params.textStyles?.length ? { textStyles: params.textStyles } : {}),
+    ...(params.replyTo ? { replyTo: params.replyTo } : {}),
+    ...(params.quoteAuthor ? { quoteAuthor: params.quoteAuthor } : {}),
   };
   if (params.silent) {
     sendOpts.silent = true;
@@ -757,6 +794,7 @@ async function sendSignalPayloadOutbound(params: {
       ? [params.payload.mediaUrl]
       : [];
   const mentions = resolveSignalPayloadMentions(params.payload);
+  const replyToId = params.payload.replyToId?.trim() || undefined;
 
   if (!text && mediaUrls.length === 0) {
     return { channel: SIGNAL_CHANNEL_ID, messageId: "" };
@@ -772,6 +810,7 @@ async function sendSignalPayloadOutbound(params: {
       accountId: params.accountId,
       silent: params.silent,
       mentions,
+      replyTo: replyToId,
       deps: params.deps,
     });
     for (let i = 1; i < mediaUrls.length; i += 1) {
@@ -800,6 +839,7 @@ async function sendSignalPayloadOutbound(params: {
       accountId: params.accountId,
       silent: params.silent,
       mentions,
+      replyTo: replyToId,
       deps: params.deps,
     });
     return { channel: SIGNAL_CHANNEL_ID, ...result };
@@ -811,6 +851,7 @@ async function sendSignalPayloadOutbound(params: {
   });
   const chunks = markdownToSignalTextChunks(text, chunkLimit, { tableMode });
   let lastResult = { messageId: "" };
+  let firstChunk = true;
   for (const chunk of chunks) {
     lastResult = await sendSignalOutbound({
       cfg: params.cfg,
@@ -820,8 +861,10 @@ async function sendSignalPayloadOutbound(params: {
       textStyles: chunk.styles,
       accountId: params.accountId,
       silent: params.silent,
+      replyTo: firstChunk ? replyToId : undefined,
       deps: params.deps,
     });
+    firstChunk = false;
   }
   return { channel: SIGNAL_CHANNEL_ID, ...lastResult };
 }
@@ -1115,18 +1158,29 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         silent: silent ?? undefined,
       });
     },
-    sendText: async ({ cfg, to, text, accountId, deps, silent }) => {
+    sendText: async ({ cfg, to, text, accountId, deps, silent, replyToId }) => {
       const result = await sendSignalOutbound({
         cfg,
         to,
         text,
         accountId: accountId ?? undefined,
         silent: silent ?? undefined,
+        replyTo: replyToId ?? undefined,
         deps,
       });
       return { channel: SIGNAL_CHANNEL_ID, ...result };
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps, silent }) => {
+    sendMedia: async ({
+      cfg,
+      to,
+      text,
+      mediaUrl,
+      mediaLocalRoots,
+      accountId,
+      deps,
+      silent,
+      replyToId,
+    }) => {
       const result = await sendSignalOutbound({
         cfg,
         to,
@@ -1135,6 +1189,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         mediaLocalRoots,
         accountId: accountId ?? undefined,
         silent: silent ?? undefined,
+        replyTo: replyToId ?? undefined,
         deps,
       });
       return { channel: SIGNAL_CHANNEL_ID, ...result };

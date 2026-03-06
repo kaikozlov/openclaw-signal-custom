@@ -6,14 +6,39 @@ import type { SignalReactionMessage } from "./monitor/event-handler.types.js";
 function isReactionMessage(
   reaction: SignalReactionMessage | null | undefined,
 ): reaction is SignalReactionMessage {
+  if (!reaction?.emoji) {
+    return false;
+  }
+  const timestamp =
+    typeof reaction.targetSentTimestamp === "number"
+      ? reaction.targetSentTimestamp
+      : typeof reaction.targetSentTimestamp === "string"
+        ? Number(reaction.targetSentTimestamp)
+        : Number.NaN;
   return Boolean(
-    reaction?.emoji &&
-      typeof reaction.targetSentTimestamp === "number" &&
-      (reaction.targetAuthor || reaction.targetAuthorUuid),
+    Number.isFinite(timestamp) &&
+      timestamp > 0 &&
+      (reaction.targetAuthor ||
+        reaction.targetAuthorUuid ||
+        reaction.targetAuthorNumber ||
+        reaction.targetAuthorE164 ||
+        reaction.targetAuthorPhone ||
+        reaction.remove === true ||
+        reaction.isRemove === true),
   );
 }
 
-function installRuntime() {
+function installRuntime(overrides?: {
+  hasControlCommand?: boolean;
+  buildMentionRegexes?: () => RegExp[];
+  matchesMentionPatterns?: () => boolean;
+  resolveGroupPolicy?: () => {
+    allowed: boolean;
+    groupConfig?: Record<string, unknown>;
+    defaultConfig?: Record<string, unknown>;
+  };
+  resolveRequireMention?: () => boolean;
+}) {
   const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async ({ ctx }: { ctx: Record<string, unknown> }) => ({
     queuedFinal: true,
     counts: { tool: 0, block: 0, final: 1 },
@@ -44,7 +69,7 @@ function installRuntime() {
         recordInboundSession: async () => {},
       },
       text: {
-        hasControlCommand: () => false,
+        hasControlCommand: () => overrides?.hasControlCommand === true,
       },
       debounce: {
         resolveInboundDebounceMs: () => 0,
@@ -56,11 +81,18 @@ function installRuntime() {
         }),
       },
       mentions: {
-        buildMentionRegexes: () => [],
-        matchesMentionPatterns: () => false,
+        buildMentionRegexes: overrides?.buildMentionRegexes ?? (() => []),
+        matchesMentionPatterns: overrides?.matchesMentionPatterns ?? (() => false),
       },
       groups: {
-        resolveRequireMention: () => false,
+        resolveGroupPolicy:
+          overrides?.resolveGroupPolicy ??
+          (() => ({
+            allowed: false,
+            groupConfig: undefined,
+            defaultConfig: undefined,
+          })),
+        resolveRequireMention: overrides?.resolveRequireMention ?? (() => false),
       },
       pairing: {
         readAllowFromStore: async () => [],
@@ -144,7 +176,7 @@ function createHandler(overrides: Partial<Parameters<typeof createSignalEventHan
     fetchAttachment: async () => null,
     deliverReplies: async () => {},
     resolveSignalReactionTargets: (reaction: SignalReactionMessage) =>
-      reaction.targetAuthor
+      typeof reaction.targetAuthor === "string"
         ? [{ kind: "phone" as const, id: reaction.targetAuthor, display: reaction.targetAuthor }]
         : [],
     isSignalReactionMessage: isReactionMessage,
@@ -218,6 +250,170 @@ describe("signal monitor edge cases", () => {
     ).toBe("Sync Group");
   });
 
+  it("captures all inbound attachments and preserves media arrays", async () => {
+    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime();
+    const fetchAttachment = vi
+      .fn()
+      .mockResolvedValueOnce({ path: "/tmp/one.jpg", contentType: "image/jpeg" })
+      .mockResolvedValueOnce({ path: "/tmp/two.png", contentType: "image/png" });
+    const handler = createHandler({ fetchAttachment });
+
+    await handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Kai",
+          timestamp: 1700000000000,
+          dataMessage: {
+            attachments: [
+              { id: "a1", contentType: "image/jpeg" },
+              { id: "a2", contentType: "image/png" },
+            ],
+          },
+        },
+      }),
+    });
+
+    expect(fetchAttachment).toHaveBeenCalledTimes(2);
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+    expect(
+      (dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0] as {
+        ctx: {
+          MediaPath?: string;
+          MediaType?: string;
+          MediaPaths?: string[];
+          MediaTypes?: string[];
+          MediaUrls?: string[];
+        };
+      }).ctx,
+    ).toEqual(
+      expect.objectContaining({
+        MediaPath: "/tmp/one.jpg",
+        MediaType: "image/jpeg",
+        MediaPaths: ["/tmp/one.jpg", "/tmp/two.png"],
+        MediaTypes: ["image/jpeg", "image/png"],
+        MediaUrls: ["/tmp/one.jpg", "/tmp/two.png"],
+      }),
+    );
+  });
+
+  it("authorizes control commands from explicitly allowed groups", async () => {
+    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
+      hasControlCommand: true,
+      resolveGroupPolicy: () => ({
+        allowed: true,
+        groupConfig: { allowFrom: [] },
+        defaultConfig: undefined,
+      }),
+    });
+    const handler = createHandler({
+      allowFrom: [],
+      groupAllowFrom: [],
+    });
+
+    await handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Kai",
+          timestamp: 1700000000000,
+          dataMessage: {
+            message: "/status",
+            groupInfo: { groupId: "g-ops", groupName: "Ops" },
+          },
+        },
+      }),
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+    expect(
+      (dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0] as {
+        ctx: { CommandAuthorized?: boolean };
+      }).ctx.CommandAuthorized,
+    ).toBe(true);
+  });
+
+  it("uses mention metadata when regex patterns are absent", async () => {
+    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
+      resolveRequireMention: () => true,
+    });
+    const handler = createHandler();
+
+    await handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Kai",
+          timestamp: 1700000000000,
+          dataMessage: {
+            message: `hello \uFFFC`,
+            mentions: [
+              {
+                number: "+15559990000",
+                start: 6,
+                length: 1,
+              },
+            ],
+            groupInfo: { groupId: "g-mention", groupName: "Mention Group" },
+          },
+        },
+      }),
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+    expect(
+      (dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0] as {
+        ctx: { WasMentioned?: boolean };
+      }).ctx.WasMentioned,
+    ).toBe(true);
+  });
+
+  it("passes quote context through to inbound ctx when Signal quote metadata is present", async () => {
+    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime();
+    const handler = createHandler();
+
+    await handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Kai",
+          timestamp: 1700000000000,
+          dataMessage: {
+            message: "I agree",
+            quote: {
+              id: 1699999990000,
+              author: "+15550009999",
+              text: "Original quoted message",
+            },
+          },
+        },
+      }),
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+    expect(
+      (dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0] as {
+        ctx: {
+          ReplyToId?: string;
+          ReplyToBody?: string;
+          ReplyToSender?: string;
+          ReplyToIsQuote?: boolean;
+        };
+      }).ctx,
+    ).toEqual(
+      expect.objectContaining({
+        ReplyToId: "1699999990000",
+        ReplyToBody: "Original quoted message",
+        ReplyToSender: "+15550009999",
+        ReplyToIsQuote: true,
+      }),
+    );
+  });
+
   it("filters expiration timer and group change system messages", async () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime();
     const handler = createHandler();
@@ -289,6 +485,109 @@ describe("signal monitor edge cases", () => {
         contextKey: expect.stringContaining("signal-custom:reaction:added"),
       }),
     );
+  });
+
+  it("ignores reaction removals that use the remove field", async () => {
+    const { dispatchReplyWithBufferedBlockDispatcher, enqueueSystemEvent } = installRuntime();
+    const handler = createHandler({
+      reactionMode: "all",
+      shouldEmitSignalReactionNotification: () => true,
+      resolveSignalReactionTargets: () => [
+        { kind: "phone", id: "+15550002222", display: "+15550002222" },
+      ],
+    });
+
+    await handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Alice",
+          reactionMessage: {
+            emoji: "✅",
+            targetAuthorNumber: "+15550002222",
+            targetSentTimestamp: "2",
+            remove: true,
+          },
+        },
+      }),
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("emits system events for edit/delete/pin/unpin control envelopes", async () => {
+    const { dispatchReplyWithBufferedBlockDispatcher, enqueueSystemEvent } = installRuntime();
+    const handler = createHandler();
+
+    await handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Alice",
+          timestamp: 1700000001234,
+          editMessage: {
+            targetSentTimestamp: 1700000000001,
+            dataMessage: {
+              message: "edited body",
+            },
+          },
+        },
+      }),
+    });
+    await handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Alice",
+          dataMessage: {
+            remoteDelete: {
+              timestamp: 1700000000002,
+            },
+          },
+        },
+      }),
+    });
+    await handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Alice",
+          timestamp: 1700000001236,
+          dataMessage: {
+            pinMessage: {
+              targetSentTimestamp: 1700000000003,
+            },
+          },
+        },
+      }),
+    });
+    await handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Alice",
+          timestamp: 1700000001237,
+          dataMessage: {
+            unpinMessage: {
+              targetSentTimestamp: 1700000000004,
+            },
+          },
+        },
+      }),
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    const texts = enqueueSystemEvent.mock.calls.map((call) => String(call[0]));
+    expect(texts.some((text) => text.includes("Signal message edited:"))).toBe(true);
+    expect(texts.some((text) => text.includes("Signal message deleted:"))).toBe(true);
+    expect(texts.some((text) => text.includes("Signal message pinned:"))).toBe(true);
+    expect(texts.some((text) => text.includes("Signal message unpinned:"))).toBe(true);
   });
 
   it("does not crash on bare reactions with non-string emoji payloads", async () => {

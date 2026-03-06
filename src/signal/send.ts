@@ -4,6 +4,7 @@ import { resolveSignalAccount } from "../config.js";
 import { getSignalRuntime } from "../runtime.js";
 import { signalRpcRequestWithRetry } from "./client.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
+import { resolveSignalReactionTarget } from "./reaction-target-cache.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
 
 export type SignalMentionRange = {
@@ -23,6 +24,8 @@ export type SignalSendOpts = {
   textStyles?: SignalTextStyleRange[];
   mentions?: SignalMentionRange[];
   silent?: boolean;
+  replyTo?: string;
+  quoteAuthor?: string;
 };
 
 export type SignalSendResult = {
@@ -33,6 +36,14 @@ export type SignalSendResult = {
 export type SignalRpcOpts = Pick<SignalSendOpts, "cfg" | "accountId" | "timeoutMs">;
 
 export type SignalReceiptType = "read" | "viewed";
+
+export function parseQuoteTimestamp(replyToId?: string | null): number | undefined {
+  if (!replyToId) {
+    return undefined;
+  }
+  const timestamp = Number.parseInt(replyToId, 10);
+  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : undefined;
+}
 
 type SignalTarget =
   | { type: "recipient"; recipient: string }
@@ -230,6 +241,25 @@ export async function sendMessageSignal(
     throw new Error("Signal recipient is required");
   }
   Object.assign(params, targetParams);
+
+  const quoteTimestamp = parseQuoteTimestamp(opts.replyTo);
+  const quotedGroupSender =
+    quoteTimestamp && target.type === "group"
+      ? resolveSignalReactionTarget({
+          groupId: target.groupId,
+          messageId: String(quoteTimestamp),
+        })
+      : undefined;
+  const quoteAuthor =
+    opts.quoteAuthor?.trim() ||
+    quotedGroupSender?.targetAuthorUuid ||
+    quotedGroupSender?.targetAuthor;
+  if (quoteTimestamp && (target.type !== "group" || quoteAuthor)) {
+    params.quoteTimestamp = quoteTimestamp;
+    if (quoteAuthor) {
+      params.quoteAuthor = quoteAuthor;
+    }
+  }
 
   const result = await signalRpcRequestWithRetry<{ timestamp?: number }>("send", params, {
     baseUrl: context.baseUrl,

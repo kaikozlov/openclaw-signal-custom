@@ -84,9 +84,37 @@ describe("signal reactions RPC", () => {
     };
     expect(body.params).toEqual(
       expect.objectContaining({
+        recipients: ["123e4567-e89b-12d3-a456-426614174000"],
         groupIds: ["group-id"],
         targetAuthor: "123e4567-e89b-12d3-a456-426614174000",
         remove: true,
+      }),
+    );
+  });
+
+  it("prefers targetAuthorUuid over targetAuthor when both are provided", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        jsonrpc: "2.0",
+        result: { timestamp: 789, results: [{ type: "SUCCESS" }] },
+      }),
+    );
+
+    await sendReactionSignal("", 789, "✅", {
+      cfg,
+      groupId: "group-id",
+      targetAuthor: "+15551230000",
+      targetAuthorUuid: "uuid:123e4567-e89b-12d3-a456-426614174000",
+    });
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      params: Record<string, unknown>;
+    };
+    expect(body.params).toEqual(
+      expect.objectContaining({
+        recipients: ["123e4567-e89b-12d3-a456-426614174000"],
+        groupIds: ["group-id"],
+        targetAuthor: "123e4567-e89b-12d3-a456-426614174000",
       }),
     );
   });
@@ -136,5 +164,32 @@ describe("signal reactions RPC", () => {
       }),
     ).rejects.toThrow(/targetAuthor is required for direct reactions/i);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("uses targetAuthor for group removals when recipient is empty", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        jsonrpc: "2.0",
+        result: { timestamp: 456, results: [{ type: "SUCCESS" }] },
+      }),
+    );
+
+    await removeReactionSignal("", 456, "❌", {
+      cfg,
+      groupId: "group-id",
+      targetAuthor: "+15551230000",
+    });
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      params: Record<string, unknown>;
+    };
+    expect(body.params).toEqual(
+      expect.objectContaining({
+        recipients: ["+15551230000"],
+        groupIds: ["group-id"],
+        targetAuthor: "+15551230000",
+        remove: true,
+      }),
+    );
   });
 });

@@ -197,19 +197,62 @@ function normalizeAllowList(raw?: Array<string | number>): string[] {
   return (raw ?? []).map((entry) => String(entry).trim()).filter(Boolean);
 }
 
+function resolveSignalReactionTimestamp(value: number | string | null | undefined): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 function resolveSignalReactionTargets(reaction: SignalReactionMessage): SignalReactionTarget[] {
   const targets: SignalReactionTarget[] = [];
-  const uuid =
-    typeof reaction.targetAuthorUuid === "string" ? reaction.targetAuthorUuid.trim() : "";
-  if (uuid) {
-    targets.push({ kind: "uuid", id: uuid, display: `uuid:${uuid}` });
-  }
-  const author = typeof reaction.targetAuthor === "string" ? reaction.targetAuthor.trim() : "";
-  if (author) {
-    const sender = resolveSignalSender({ sourceNumber: author });
-    if (sender?.kind === "phone") {
-      targets.push({ kind: "phone", id: sender.e164, display: sender.e164 });
+
+  const addUuidTarget = (value?: string | null) => {
+    const normalized = value?.trim();
+    if (
+      !normalized ||
+      targets.some((target) => target.kind === "uuid" && target.id === normalized)
+    ) {
+      return;
     }
+    targets.push({ kind: "uuid", id: normalized, display: `uuid:${normalized}` });
+  };
+
+  const addPhoneTarget = (value?: string | null) => {
+    const sender = typeof value === "string" ? resolveSignalSender({ sourceNumber: value }) : null;
+    if (
+      sender?.kind !== "phone" ||
+      targets.some((target) => target.kind === "phone" && target.id === sender.e164)
+    ) {
+      return;
+    }
+    targets.push({ kind: "phone", id: sender.e164, display: sender.e164 });
+  };
+
+  addUuidTarget(reaction.targetAuthorUuid);
+  addUuidTarget(reaction.targetAuthorAci);
+  addUuidTarget(reaction.targetAuthorServiceId);
+  addUuidTarget(reaction.targetAuthorId);
+  addPhoneTarget(reaction.targetAuthorNumber);
+  addPhoneTarget(reaction.targetAuthorE164);
+  addPhoneTarget(reaction.targetAuthorPhone);
+
+  if (typeof reaction.targetAuthor === "string") {
+    addPhoneTarget(reaction.targetAuthor);
+  } else if (reaction.targetAuthor && typeof reaction.targetAuthor === "object") {
+    addUuidTarget(reaction.targetAuthor.uuid);
+    addUuidTarget(reaction.targetAuthor.aci);
+    addUuidTarget(reaction.targetAuthor.serviceId);
+    addPhoneTarget(reaction.targetAuthor.number);
+    addPhoneTarget(reaction.targetAuthor.e164);
   }
   return targets;
 }
@@ -217,16 +260,16 @@ function resolveSignalReactionTargets(reaction: SignalReactionMessage): SignalRe
 function isSignalReactionMessage(
   reaction: SignalReactionMessage | null | undefined,
 ): reaction is SignalReactionMessage {
-  if (!reaction) {
+  if (!reaction || typeof reaction !== "object") {
     return false;
   }
   const emoji = typeof reaction.emoji === "string" ? reaction.emoji.trim() : "";
-  const timestamp = reaction.targetSentTimestamp;
-  const hasTarget = Boolean(
-    (typeof reaction.targetAuthor === "string" && reaction.targetAuthor.trim()) ||
-      (typeof reaction.targetAuthorUuid === "string" && reaction.targetAuthorUuid.trim()),
-  );
-  return Boolean(emoji && typeof timestamp === "number" && timestamp > 0 && hasTarget);
+  const timestamp = resolveSignalReactionTimestamp(reaction.targetSentTimestamp);
+  if (!emoji || !timestamp) {
+    return false;
+  }
+  const hasTarget = resolveSignalReactionTargets(reaction).length > 0;
+  return hasTarget || reaction.isRemove === true || reaction.remove === true;
 }
 
 function shouldEmitSignalReactionNotification(params: {
@@ -395,15 +438,20 @@ async function deliverReplies(params: {
   maxBytes: number;
   textLimit: number;
   chunkMode: "length" | "newline";
+  quoteAuthor?: string;
 }) {
   const { cfg, replies, target, accountId, runtime, maxBytes, textLimit, chunkMode } = params;
+  const consumedReplyIds = new Set<string>();
   for (const payload of replies) {
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const text = payload.text ?? "";
     if (!text && mediaList.length === 0) {
       continue;
     }
+    const replyToId = payload.replyToId?.trim() || undefined;
+    const includeQuote = replyToId !== undefined && !consumedReplyIds.has(replyToId);
     if (mediaList.length === 0) {
+      let first = true;
       for (const chunk of getSignalRuntime().channel.text.chunkTextWithMode(
         text,
         textLimit,
@@ -413,19 +461,30 @@ async function deliverReplies(params: {
           cfg,
           accountId,
           maxBytes,
+          replyTo: first && includeQuote ? replyToId : undefined,
+          quoteAuthor: first && includeQuote ? params.quoteAuthor : undefined,
         });
+        if (first && includeQuote && replyToId) {
+          consumedReplyIds.add(replyToId);
+        }
+        first = false;
       }
     } else {
       let first = true;
       for (const url of mediaList) {
         const caption = first ? text : "";
-        first = false;
         await sendMessageSignal(target, caption, {
           cfg,
           mediaUrl: url,
           maxBytes,
           accountId,
+          replyTo: first && includeQuote ? replyToId : undefined,
+          quoteAuthor: first && includeQuote ? params.quoteAuthor : undefined,
         });
+        if (first && includeQuote && replyToId) {
+          consumedReplyIds.add(replyToId);
+        }
+        first = false;
       }
     }
     runtime.log?.(`delivered reply to ${target}`);

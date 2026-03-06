@@ -87,6 +87,11 @@ function createBaseHandler(params?: {
         matchesMentionPatterns: () => false,
       },
       groups: {
+        resolveGroupPolicy: () => ({
+          allowed: false,
+          groupConfig: undefined,
+          defaultConfig: undefined,
+        }),
         resolveRequireMention: () => false,
       },
       pairing: {

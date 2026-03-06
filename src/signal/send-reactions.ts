@@ -66,7 +66,7 @@ function resolveTargetAuthorParams(params: {
 }): {
   targetAuthor?: string;
 } {
-  const candidates = [params.targetAuthor, params.targetAuthorUuid];
+  const candidates = [params.targetAuthorUuid, params.targetAuthor];
   for (const candidate of candidates) {
     if (typeof candidate !== "string") {
       continue;
@@ -144,8 +144,10 @@ async function sendReactionSignalCore(params: {
     ...(params.remove ? { remove: true } : {}),
     ...(resolvedTargetAuthor ? { targetAuthor: resolvedTargetAuthor } : {}),
   };
-  if (normalizedRecipient) {
-    requestParams.recipients = [normalizedRecipient];
+  const recipientTarget =
+    normalizedRecipient || (groupId ? targetAuthorParams.targetAuthor?.trim() : undefined);
+  if (recipientTarget) {
+    requestParams.recipients = [recipientTarget];
   }
   if (groupId) {
     requestParams.groupIds = [groupId];
