@@ -59,7 +59,8 @@
 - [x] Implement `reactionLevel: "ack"` behavior (`#31078`)
 - [x] Port `cliPath` validation before daemon spawn (`#8767`)
 - [x] Port `configPath` support for signal-cli daemon startup (`#27771`)
-- [ ] Review remaining lower-priority candidates (`#15994`, `#15956`, `#16085`)
+- [x] Port stock-host-reachable poll create support and explicit `unsend` gating (`#15994`, partial)
+- [ ] Review remaining lower-priority candidates (`#15956`, `#16085`)
 
 ## Rules
 

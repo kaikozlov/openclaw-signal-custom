@@ -275,6 +275,59 @@ export async function sendMessageSignal(
   };
 }
 
+export async function sendPollCreateSignal(
+  to: string,
+  poll: {
+    question: string;
+    options: string[];
+    allowMultiple?: boolean;
+  } & SignalRpcOpts,
+): Promise<SignalSendResult> {
+  const question = poll.question.trim();
+  if (!question) {
+    throw new Error("Poll question is required");
+  }
+  const options = poll.options.map((option) => option.trim()).filter(Boolean);
+  if (options.length < 2) {
+    throw new Error("At least two poll options are required");
+  }
+
+  const context = resolveSignalRpcContext({
+    cfg: poll.cfg,
+    accountId: poll.accountId,
+  });
+  const targetParams = buildTargetParams(parseTarget(to), {
+    recipient: true,
+    group: true,
+    username: true,
+  });
+  if (!targetParams) {
+    throw new Error("Signal recipient is required");
+  }
+
+  const params: Record<string, unknown> = {
+    ...targetParams,
+    question,
+    option: options,
+    noMulti: !(poll.allowMultiple ?? false),
+  };
+  if (context.account) {
+    params.account = context.account;
+  }
+  const result = await signalRpcRequestWithRetry<{ timestamp?: number }>("sendPollCreate", params, {
+    baseUrl: context.baseUrl,
+    timeoutMs: poll.timeoutMs,
+    retry: context.retry,
+    tcpHost: context.tcpHost,
+    tcpPort: context.tcpPort,
+  });
+  const timestamp = result?.timestamp;
+  return {
+    messageId: timestamp ? String(timestamp) : "unknown",
+    timestamp,
+  };
+}
+
 export async function sendTypingSignal(
   to: string,
   opts: SignalRpcOpts & { stop?: boolean },

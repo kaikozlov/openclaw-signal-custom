@@ -10,6 +10,8 @@ describe("signalPlugin outbound sendMedia", () => {
   it("declares blockStreaming and mention strip patterns", () => {
     expect(signalPlugin.capabilities?.blockStreaming).toBe(true);
     expect(signalPlugin.capabilities?.edit).toBe(true);
+    expect(signalPlugin.capabilities?.polls).toBe(true);
+    expect(signalPlugin.capabilities?.unsend).toBe(true);
     expect(signalPlugin.mentions?.stripPatterns?.({} as never)).toEqual(["\uFFFC"]);
   });
 
@@ -396,6 +398,31 @@ describe("signalPlugin outbound sendMedia", () => {
     expect(actions).toContain("send");
     expect(actions).toContain("edit");
     expect(actions).toContain("delete");
+    expect(actions).toContain("unsend");
+  });
+
+  it("blocks unsend when actions.unsend is disabled", async () => {
+    await expect(
+      signalPlugin.actions?.handleAction?.({
+        channel: "signal-custom",
+        action: "unsend",
+        cfg: {
+          channels: {
+            "signal-custom": {
+              account: "+15550001111",
+              httpUrl: "http://signal.local",
+              actions: {
+                unsend: false,
+              },
+            },
+          },
+        } as never,
+        params: {
+          to: "signal:+15550001111",
+          messageId: "1700000000000",
+        },
+      } as never),
+    ).rejects.toThrow(/actions\.unsend/);
   });
 
   it("lists sticker actions when actions.stickers is enabled", () => {

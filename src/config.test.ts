@@ -28,6 +28,8 @@ describe("signal-custom config", () => {
       },
       actions: {
         reactions: true,
+        unsend: true,
+        poll: true,
         editMessage: true,
         deleteMessage: true,
         stickers: true,

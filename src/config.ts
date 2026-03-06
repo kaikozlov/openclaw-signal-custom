@@ -53,6 +53,8 @@ const SignalGroupSchema = z
 const SignalActionsSchema = z
   .object({
     reactions: z.boolean().optional(),
+    unsend: z.boolean().optional(),
+    poll: z.boolean().optional(),
     editMessage: z.boolean().optional(),
     deleteMessage: z.boolean().optional(),
     stickers: z.boolean().optional(),
@@ -83,6 +85,8 @@ export type SignalGroupConfig = {
 
 export type SignalActionConfig = {
   reactions?: boolean;
+  unsend?: boolean;
+  poll?: boolean;
   editMessage?: boolean;
   deleteMessage?: boolean;
   stickers?: boolean;

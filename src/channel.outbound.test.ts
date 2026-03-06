@@ -358,4 +358,52 @@ describe("signal outbound cfg threading", () => {
       await socketServer.close();
     }
   });
+
+  it("sends polls through the plugin-local outbound adapter", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    fetchMock.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      statusText: "OK",
+      text: async () =>
+        JSON.stringify({
+          jsonrpc: "2.0",
+          result: { timestamp: 1700000008000 },
+        }),
+    } as Response);
+    global.fetch = fetchMock;
+
+    const result = await signalPlugin.outbound!.sendPoll!({
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15559990000",
+            httpUrl: "http://signal.local",
+          },
+        },
+      } as never,
+      to: "group:grp-1",
+      poll: {
+        question: "Lunch?",
+        options: ["Pizza", "Sushi"],
+        maxSelections: 2,
+      },
+    });
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      method: string;
+      params: Record<string, unknown>;
+    };
+    expect(body.method).toBe("sendPollCreate");
+    expect(body.params).toEqual(
+      expect.objectContaining({
+        account: "+15559990000",
+        groupId: "grp-1",
+        question: "Lunch?",
+        option: ["Pizza", "Sushi"],
+        noMulti: false,
+      }),
+    );
+    expect(result).toEqual({ messageId: "1700000008000" });
+  });
 });

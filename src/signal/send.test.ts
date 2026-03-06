@@ -9,7 +9,7 @@ import {
   __clearSignalReactionTargetCacheForTests,
   recordSignalReactionTarget,
 } from "./reaction-target-cache.js";
-import { parseQuoteTimestamp, sendMessageSignal } from "./send.js";
+import { parseQuoteTimestamp, sendMessageSignal, sendPollCreateSignal } from "./send.js";
 
 function makeResponse(params: {
   status?: number;
@@ -309,5 +309,67 @@ describe("sendMessageSignal", () => {
         quoteAuthor: "123e4567-e89b-12d3-a456-426614174000",
       }),
     );
+  });
+
+  it("sends Signal polls through sendPollCreate with option and noMulti params", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        text: JSON.stringify({
+          jsonrpc: "2.0",
+          result: { timestamp: 1700000007000 },
+        }),
+      }),
+    );
+
+    const result = await sendPollCreateSignal("group:grp-poll", {
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15559990000",
+            httpUrl: "http://signal.local",
+          },
+        },
+      } as never,
+      question: "Lunch?",
+      options: ["Pizza", "Sushi"],
+      allowMultiple: true,
+    });
+
+    expect(result).toEqual({
+      messageId: "1700000007000",
+      timestamp: 1700000007000,
+    });
+    const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      method: string;
+      params: Record<string, unknown>;
+    };
+    expect(body.method).toBe("sendPollCreate");
+    expect(body.params).toEqual(
+      expect.objectContaining({
+        account: "+15559990000",
+        groupId: "grp-poll",
+        question: "Lunch?",
+        option: ["Pizza", "Sushi"],
+        noMulti: false,
+      }),
+    );
+  });
+
+  it("rejects Signal polls with fewer than two options", async () => {
+    await expect(
+      sendPollCreateSignal("+15550001111", {
+        cfg: {
+          channels: {
+            "signal-custom": {
+              account: "+15559990000",
+              httpUrl: "http://signal.local",
+            },
+          },
+        } as never,
+        question: "Lunch?",
+        options: ["Pizza"],
+      }),
+    ).rejects.toThrow(/at least two poll options/i);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

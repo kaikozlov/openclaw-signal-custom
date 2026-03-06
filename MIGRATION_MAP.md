@@ -195,11 +195,12 @@ These are the remaining open Signal PRs that look materially useful for `signal-
 - `#31078`: `reactionLevel: "ack"` now sends immediate ACK reactions before reply dispatch, with shared scope gating
 - `#8767`: daemon startup now rejects unsafe `cliPath` values before spawning `signal-cli`
 - `#27771`: `configPath` is now supported and passed through as `signal-cli --config ...` on local daemon startup
+- `#15994` (partial): stock-host-reachable poll creation now uses local `sendPollCreate`, and `unsend` now has its own action gate
 - `#6591`: parallel attachment fetch behavior is covered locally, but the PR's extra UX/quote formatting pieces are not yet ported
 
 ### Lower-Priority Candidates
 
-- #15994: unsend + poll lifecycle actions
+- #15994: `pollVote` and `pollTerminate` remain blocked on stock host because those action names are not in the current OpenClaw release schema
 - #15956: broad inbound metadata preservation bundle
 - #16085: container REST-mode compatibility
 

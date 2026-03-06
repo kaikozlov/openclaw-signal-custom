@@ -21,7 +21,7 @@ What is standalone today:
 - config/account resolution
 - onboarding/setup
 - outbound sends
-- reactions, ACK reactions, stickers, edit/delete, silent send
+- reactions, ACK reactions, polls, stickers, edit/delete, silent send
 - directory/group lookup and group-management actions
 - retry + TCP socket transport
 - configurable `signal-cli --config` path and validated daemon spawn path

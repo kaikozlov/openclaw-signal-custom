@@ -52,6 +52,7 @@ import {
 } from "./signal/send-actions.js";
 import {
   sendMessageSignal,
+  sendPollCreateSignal,
   type SignalMentionRange,
   type SignalSendOpts,
   type SignalSendResult,
@@ -109,6 +110,12 @@ const signalMessageActions: ChannelMessageActionAdapter = {
     if (deleteEnabled) {
       actions.add("delete");
     }
+    const unsendEnabled = configuredAccounts.some((account) =>
+      createSignalActionGate(account.config.actions)("unsend"),
+    );
+    if (unsendEnabled) {
+      actions.add("unsend");
+    }
     const stickerEnabled = configuredAccounts.some((account) =>
       createSignalActionGate(account.config.actions)("stickers", false),
     );
@@ -163,7 +170,11 @@ const signalMessageActions: ChannelMessageActionAdapter = {
     }
     if (ctx.action === "delete" || ctx.action === "unsend") {
       const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
-      if (!createSignalActionGate(actionConfig)("deleteMessage")) {
+      if (ctx.action === "unsend") {
+        if (!createSignalActionGate(actionConfig)("unsend")) {
+          throw new Error("Signal unsend is disabled via actions.unsend.");
+        }
+      } else if (!createSignalActionGate(actionConfig)("deleteMessage")) {
         throw new Error("Signal delete is disabled via actions.deleteMessage.");
       }
       const recipient = readSignalRecipientParam(ctx.params);
@@ -379,6 +390,8 @@ type SignalPayloadChannelData = {
 
 type SignalActionConfig = {
   reactions?: boolean;
+  unsend?: boolean;
+  poll?: boolean;
   editMessage?: boolean;
   deleteMessage?: boolean;
   stickers?: boolean;
@@ -884,9 +897,11 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   },
   capabilities: {
     chatTypes: ["direct", "group"],
+    polls: true,
     media: true,
     reactions: true,
     edit: true,
+    unsend: true,
     groupManagement: true,
     blockStreaming: true,
   },
@@ -1201,6 +1216,20 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         deps,
       });
       return { channel: SIGNAL_CHANNEL_ID, ...result };
+    },
+    sendPoll: async ({ cfg, to, poll, accountId }) => {
+      const actionConfig = resolveSignalAccount({ cfg, accountId }).config.actions;
+      if (!createSignalActionGate(actionConfig)("poll")) {
+        throw new Error("Signal poll creation is disabled via actions.poll.");
+      }
+      const result = await sendPollCreateSignal(to, {
+        cfg,
+        accountId: accountId ?? undefined,
+        question: poll.question,
+        options: poll.options,
+        allowMultiple: (poll.maxSelections ?? 1) > 1,
+      });
+      return { messageId: result.messageId };
     },
   },
   status: {
