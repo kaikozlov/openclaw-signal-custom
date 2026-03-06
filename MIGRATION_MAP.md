@@ -207,6 +207,20 @@ These are the remaining open Signal PRs that look materially useful for `signal-
 - #15994: `pollVote` and `pollTerminate` remain blocked on stock host because those action names are not in the current OpenClaw release schema
 - #16085: container REST-mode compatibility
 
+## Deferred UX Backlog
+
+These are intentionally documented but not in progress yet.
+
+1. Telegram-style status reaction lifecycle for Signal
+   - Goal: move beyond simple ACK reactions and add queued / thinking / done / error reaction feedback
+   - Rationale: user-visible polish win with clear parity value vs Telegram
+2. Better sticker text/context
+   - Goal: preserve richer sticker descriptions instead of falling back to generic sticker placeholders
+   - Rationale: improves inbound readability and agent context quality
+3. Outbound attachment bundling validation
+   - Goal: live-test whether `signal-cli` can send multiple non-image attachments in a single message cleanly
+   - Constraint: do not implement until real daemon behavior is verified
+
 ### Reviewed But Not New Priority Work
 
 - #25543 duplicates #29154 in practice

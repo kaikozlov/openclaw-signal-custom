@@ -152,7 +152,7 @@ describe("signalPlugin outbound sendMedia", () => {
     expect(toolPolicy).toEqual({ deny: ["exec"] });
   });
 
-  it("requires targetAuthor for react actions before local handler call", async () => {
+  it("requires targetAuthor for group reactions before local handler call", async () => {
     const handleAction = vi.fn(async (_ctx: unknown) => ({ content: [] }));
     setSignalRuntime({
       channel: {
@@ -170,7 +170,7 @@ describe("signalPlugin outbound sendMedia", () => {
         action: "react",
         cfg: {} as never,
         params: {
-          to: "signal:+15550001111",
+          to: "signal:group:group-1",
           messageId: "123",
           emoji: "✅",
         },
@@ -313,6 +313,135 @@ describe("signalPlugin outbound sendMedia", () => {
           recipients: ["123e4567-e89b-12d3-a456-426614174000"],
           targetAuthor: "123e4567-e89b-12d3-a456-426614174000",
           targetTimestamp: 1700000000456,
+        }),
+      );
+    } finally {
+      __clearSignalReactionTargetCacheForTests();
+      global.fetch = originalFetch;
+    }
+  });
+
+  it("fills direct reaction targetAuthor from the DM recipient when no explicit author is provided", async () => {
+    const handleAction = vi.fn(async (_ctx: unknown) => ({ content: [] }));
+    setSignalRuntime({
+      channel: {
+        signal: {
+          messageActions: {
+            handleAction,
+          },
+        },
+      },
+    } as never);
+
+    const originalFetch = global.fetch;
+    const fetchMock = vi.fn<typeof fetch>();
+    fetchMock.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      statusText: "OK",
+      text: async () =>
+        JSON.stringify({
+          jsonrpc: "2.0",
+          result: { timestamp: 1700000000101, results: [{ type: "SUCCESS" }] },
+        }),
+    } as Response);
+    global.fetch = fetchMock;
+    try {
+      await signalPlugin.actions?.handleAction?.({
+        channel: "signal-custom",
+        action: "react",
+        cfg: {
+          channels: {
+            "signal-custom": {
+              account: "+15550001111",
+              httpUrl: "http://signal.local",
+            },
+          },
+        } as never,
+        params: {
+          to: "signal:+15550002222",
+          messageId: "1700000000457",
+          emoji: "✅",
+        },
+      } as never);
+
+      expect(handleAction).not.toHaveBeenCalled();
+      const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+        params: Record<string, unknown>;
+      };
+      expect(body.params).toEqual(
+        expect.objectContaining({
+          recipients: ["+15550002222"],
+          targetAuthor: "+15550002222",
+          targetTimestamp: 1700000000457,
+        }),
+      );
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it("prefers cached direct reaction authors when a uuid is available", async () => {
+    __clearSignalReactionTargetCacheForTests();
+    recordSignalReactionTarget({
+      recipient: "+15550002222",
+      messageId: "1700000000458",
+      senderId: "uuid:123e4567-e89b-12d3-a456-426614174000",
+      senderE164: "+15550002222",
+    });
+
+    const handleAction = vi.fn(async (_ctx: unknown) => ({ content: [] }));
+    setSignalRuntime({
+      channel: {
+        signal: {
+          messageActions: {
+            handleAction,
+          },
+        },
+      },
+    } as never);
+
+    const originalFetch = global.fetch;
+    const fetchMock = vi.fn<typeof fetch>();
+    fetchMock.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      statusText: "OK",
+      text: async () =>
+        JSON.stringify({
+          jsonrpc: "2.0",
+          result: { timestamp: 1700000000102, results: [{ type: "SUCCESS" }] },
+        }),
+    } as Response);
+    global.fetch = fetchMock;
+    try {
+      await signalPlugin.actions?.handleAction?.({
+        channel: "signal-custom",
+        action: "react",
+        cfg: {
+          channels: {
+            "signal-custom": {
+              account: "+15550001111",
+              httpUrl: "http://signal.local",
+            },
+          },
+        } as never,
+        params: {
+          to: "signal:+15550002222",
+          messageId: "1700000000458",
+          emoji: "✅",
+        },
+      } as never);
+
+      expect(handleAction).not.toHaveBeenCalled();
+      const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+        params: Record<string, unknown>;
+      };
+      expect(body.params).toEqual(
+        expect.objectContaining({
+          recipients: ["+15550002222"],
+          targetAuthor: "123e4567-e89b-12d3-a456-426614174000",
+          targetTimestamp: 1700000000458,
         }),
       );
     } finally {

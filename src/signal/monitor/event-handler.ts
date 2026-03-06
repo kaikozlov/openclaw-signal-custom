@@ -1590,11 +1590,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       ...pollContext,
       ...editContext,
     ];
-    if (isGroup && groupId && messageId) {
+    if (messageId) {
       recordSignalReactionTarget({
         groupId,
+        recipient: !isGroup ? senderRecipient : undefined,
         messageId,
-        senderId: senderPeerId,
+        senderId:
+          sender.kind === "phone" && sender.uuid
+            ? `uuid:${sender.uuid}`
+            : senderPeerId,
         senderE164: sender.kind === "phone" ? sender.e164 : undefined,
       });
     }

@@ -4,6 +4,7 @@ import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
   resolveSignalAccount,
+  resolveSignalMarkdownTableMode,
 } from "./config.js";
 import {
   looksLikeSignalCustomTargetId,
@@ -89,6 +90,61 @@ describe("signal-custom config", () => {
         configured: true,
       }),
     );
+  });
+
+  it("defaults signal-custom tables to bullets and respects overrides", () => {
+    expect(
+      resolveSignalMarkdownTableMode({
+        cfg: {
+          channels: {
+            "signal-custom": {
+              account: "+15550001111",
+              httpUrl: "http://signal.local",
+            },
+          },
+        } as never,
+      }),
+    ).toBe("bullets");
+
+    expect(
+      resolveSignalMarkdownTableMode({
+        cfg: {
+          channels: {
+            "signal-custom": {
+              account: "+15550001111",
+              httpUrl: "http://signal.local",
+              markdown: { tables: "code" },
+              accounts: {
+                Work: {
+                  markdown: {},
+                },
+              },
+            },
+          },
+        } as never,
+        accountId: "work",
+      }),
+    ).toBe("code");
+
+    expect(
+      resolveSignalMarkdownTableMode({
+        cfg: {
+          channels: {
+            "signal-custom": {
+              account: "+15550001111",
+              httpUrl: "http://signal.local",
+              markdown: { tables: "code" },
+              accounts: {
+                Work: {
+                  markdown: { tables: "off" },
+                },
+              },
+            },
+          },
+        } as never,
+        accountId: "work",
+      }),
+    ).toBe("off");
   });
 
   it("accepts signal-custom target prefixes", () => {

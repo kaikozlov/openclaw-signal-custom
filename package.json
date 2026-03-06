@@ -4,10 +4,11 @@
   "private": true,
   "description": "OpenClaw Signal custom channel plugin (fork baseline)",
   "type": "module",
+  "packageManager": "pnpm@10.30.3",
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm run test"
+    "check": "tsc --noEmit && vitest run"
   },
   "dependencies": {
     "markdown-it": "14.1.1",

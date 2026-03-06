@@ -46,6 +46,25 @@ describe("signal reaction target cache", () => {
     });
   });
 
+  it("records and resolves direct-chat authors", () => {
+    recordSignalReactionTarget({
+      recipient: "signal:+15551230000",
+      messageId: "1771181675531",
+      senderId: "signal:uuid:e489bcc7-6a67-429f-8278-a5710dcd8b02",
+      senderE164: "+15551230000",
+    });
+
+    expect(
+      resolveSignalReactionTarget({
+        recipient: "+15551230000",
+        messageId: "1771181675531",
+      }),
+    ).toEqual({
+      targetAuthorUuid: "e489bcc7-6a67-429f-8278-a5710dcd8b02",
+      targetAuthor: "+15551230000",
+    });
+  });
+
   it("normalizes signal and group prefixes on lookup", () => {
     recordSignalReactionTarget({
       groupId: "signal-custom:group:imrDE/AziMTrojCb1ngE9WcREGjKxjRq30krncLOZnM=",

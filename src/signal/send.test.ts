@@ -89,6 +89,44 @@ describe("sendMessageSignal", () => {
     );
   });
 
+  it("defaults markdown tables to bullets for signal-custom", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        text: JSON.stringify({
+          jsonrpc: "2.0",
+          result: { timestamp: 1700000002001 },
+        }),
+      }),
+    );
+
+    await sendMessageSignal(
+      "+15550006666",
+      "| Name | Value |\n| --- | --- |\n| A | 1 |\n| B | 2 |",
+      {
+        cfg: {
+          channels: {
+            "signal-custom": {
+              account: "+15559990000",
+              httpUrl: "http://signal.local",
+            },
+          },
+        } as never,
+      },
+    );
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      params: Record<string, unknown>;
+    };
+    expect(body.params).toEqual(
+      expect.objectContaining({
+        account: "+15559990000",
+        message: "A\n• Value: 1\n\nB\n• Value: 2",
+        recipient: ["+15550006666"],
+        "text-style": ["0:1:BOLD", "14:1:BOLD"],
+      }),
+    );
+  });
+
   it("saves outbound media locally before sending attachment paths", async () => {
     const mediaDir = await mkdtemp(path.join(tmpdir(), "signal-send-"));
     const mediaPath = path.join(mediaDir, "clip.txt");
@@ -157,7 +195,7 @@ describe("sendMessageSignal", () => {
     expect(parseQuoteTimestamp("-1")).toBeUndefined();
   });
 
-  it("sends DM quote replies with quoteTimestamp even without quoteAuthor", async () => {
+  it("fills quoteAuthor from the direct recipient for DM quote replies", async () => {
     setSignalRuntime({
       channel: {
         text: {
@@ -193,9 +231,9 @@ describe("sendMessageSignal", () => {
       expect.objectContaining({
         recipient: ["+15550006666"],
         quoteTimestamp: 1700000001234,
+        quoteAuthor: "+15550006666",
       }),
     );
-    expect(body.params.quoteAuthor).toBeUndefined();
   });
 
   it("requires a quote author source before attaching group quote metadata", async () => {
@@ -306,6 +344,53 @@ describe("sendMessageSignal", () => {
       expect.objectContaining({
         groupId: "grp-2",
         quoteTimestamp: 1700000002234,
+        quoteAuthor: "123e4567-e89b-12d3-a456-426614174000",
+      }),
+    );
+  });
+
+  it("prefers cached direct quote authors when a uuid is available", async () => {
+    setSignalRuntime({
+      channel: {
+        text: {
+          resolveMarkdownTableMode: () => "off",
+        },
+      },
+    } as never);
+    recordSignalReactionTarget({
+      recipient: "+15550007777",
+      messageId: "1700000003234",
+      senderId: "uuid:123e4567-e89b-12d3-a456-426614174000",
+      senderE164: "+15550007777",
+    });
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        text: JSON.stringify({
+          jsonrpc: "2.0",
+          result: { timestamp: 1700000006001 },
+        }),
+      }),
+    );
+
+    await sendMessageSignal("+15550007777", "cached DM reply", {
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15559990000",
+            httpUrl: "http://signal.local",
+          },
+        },
+      } as never,
+      replyTo: "1700000003234",
+    });
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      params: Record<string, unknown>;
+    };
+    expect(body.params).toEqual(
+      expect.objectContaining({
+        recipient: ["+15550007777"],
+        quoteTimestamp: 1700000003234,
         quoteAuthor: "123e4567-e89b-12d3-a456-426614174000",
       }),
     );

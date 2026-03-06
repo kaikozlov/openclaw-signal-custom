@@ -5,7 +5,9 @@ import {
   DmPolicySchema,
   type GroupPolicy,
   GroupPolicySchema,
+  type MarkdownConfig,
   MarkdownConfigSchema,
+  type MarkdownTableMode,
   ToolPolicySchema,
   normalizeAccountId,
   type GroupToolPolicyBySenderConfig,
@@ -96,7 +98,7 @@ export type SignalActionConfig = {
 export type SignalAccountConfig = {
   name?: string;
   capabilities?: string[];
-  markdown?: unknown;
+  markdown?: MarkdownConfig;
   configWrites?: boolean;
   ackReaction?: string;
   enabled?: boolean;
@@ -164,6 +166,9 @@ export type ResolvedSignalAccount = {
 function normalizeAllowFrom(values?: Array<string | number>): string[] {
   return (values ?? []).map((entry) => String(entry).trim()).filter(Boolean);
 }
+
+const isMarkdownTableMode = (value: unknown): value is MarkdownTableMode =>
+  value === "off" || value === "bullets" || value === "code";
 
 function requireOpenAllowFrom(params: {
   policy?: string;
@@ -349,6 +354,23 @@ export function resolveDefaultSignalAccountId(cfg: OpenClawConfig): string {
     return DEFAULT_ACCOUNT_ID;
   }
   return accountIds[0] ?? DEFAULT_ACCOUNT_ID;
+}
+
+export function resolveSignalMarkdownTableMode(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): MarkdownTableMode {
+  const channel = getSignalConfig(params.cfg);
+  const accountId = normalizeAccountId(params.accountId);
+  const accountMode = resolveAccountEntry(channel?.accounts, accountId)?.markdown?.tables;
+  if (isMarkdownTableMode(accountMode)) {
+    return accountMode;
+  }
+  const channelMode = channel?.markdown?.tables;
+  if (isMarkdownTableMode(channelMode)) {
+    return channelMode;
+  }
+  return "bullets";
 }
 
 function mergeSignalAccountConfig(cfg: OpenClawConfig, accountId: string): SignalAccountConfig {

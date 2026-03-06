@@ -1,6 +1,6 @@
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "openclaw/plugin-sdk";
 import { SIGNAL_CHANNEL_ID, stripSignalChannelPrefix } from "../constants.js";
-import { resolveSignalAccount } from "../config.js";
+import { resolveSignalAccount, resolveSignalMarkdownTableMode } from "../config.js";
 import { getSignalRuntime } from "../runtime.js";
 import { signalRpcRequestWithRetry } from "./client.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
@@ -197,9 +197,8 @@ export async function sendMessageSignal(
     if (textMode === "plain") {
       textStyles = opts.textStyles ?? [];
     } else {
-      const tableMode = getSignalRuntime().channel.text.resolveMarkdownTableMode({
+      const tableMode = resolveSignalMarkdownTableMode({
         cfg,
-        channel: SIGNAL_CHANNEL_ID,
         accountId: accountInfo.accountId,
       });
       const formatted = markdownToSignalText(message, { tableMode });
@@ -243,22 +242,32 @@ export async function sendMessageSignal(
   Object.assign(params, targetParams);
 
   const quoteTimestamp = parseQuoteTimestamp(opts.replyTo);
-  const quotedGroupSender =
-    quoteTimestamp && target.type === "group"
-      ? resolveSignalReactionTarget({
-          groupId: target.groupId,
-          messageId: String(quoteTimestamp),
-        })
-      : undefined;
+  const quotedSender = quoteTimestamp
+    ? resolveSignalReactionTarget({
+        groupId: target.type === "group" ? target.groupId : undefined,
+        recipient:
+          target.type === "recipient"
+            ? target.recipient
+            : target.type === "username"
+              ? target.username
+              : undefined,
+        messageId: String(quoteTimestamp),
+      })
+    : undefined;
+  const directFallbackQuoteAuthor =
+    target.type === "recipient"
+      ? target.recipient
+      : target.type === "username"
+        ? target.username
+        : undefined;
   const quoteAuthor =
     opts.quoteAuthor?.trim() ||
-    quotedGroupSender?.targetAuthorUuid ||
-    quotedGroupSender?.targetAuthor;
-  if (quoteTimestamp && (target.type !== "group" || quoteAuthor)) {
+    quotedSender?.targetAuthorUuid ||
+    quotedSender?.targetAuthor ||
+    directFallbackQuoteAuthor?.trim();
+  if (quoteTimestamp && quoteAuthor) {
     params.quoteTimestamp = quoteTimestamp;
-    if (quoteAuthor) {
-      params.quoteAuthor = quoteAuthor;
-    }
+    params.quoteAuthor = quoteAuthor;
   }
 
   const result = await signalRpcRequestWithRetry<{ timestamp?: number }>("send", params, {

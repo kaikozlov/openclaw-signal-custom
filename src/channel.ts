@@ -35,6 +35,7 @@ import {
   resolveDefaultSignalAccountId,
   resolveSignalAccount,
   SignalConfigSchema,
+  resolveSignalMarkdownTableMode,
   type ResolvedSignalAccount,
 } from "./config.js";
 import { SIGNAL_CHANNEL_ID, SIGNAL_META, stripSignalChannelPrefix } from "./constants.js";
@@ -547,19 +548,22 @@ function resolveReactionTargetAuthor(params: {
   }
 
   const destination = resolveSignalReactionDestination(params.recipientRaw);
-  if (destination.groupId) {
-    const cachedTarget = resolveCachedSignalReactionTarget({
-      groupId: destination.groupId,
-      messageId: params.messageId,
-    });
-    if (cachedTarget?.targetAuthorUuid) {
-      params.args.targetAuthorUuid = cachedTarget.targetAuthorUuid;
-      return { targetAuthorUuid: cachedTarget.targetAuthorUuid };
-    }
-    if (cachedTarget?.targetAuthor) {
-      params.args.targetAuthor = cachedTarget.targetAuthor;
-      return { targetAuthor: cachedTarget.targetAuthor };
-    }
+  const cachedTarget = resolveCachedSignalReactionTarget({
+    groupId: destination.groupId,
+    recipient: destination.groupId ? undefined : destination.recipient,
+    messageId: params.messageId,
+  });
+  if (cachedTarget?.targetAuthorUuid) {
+    params.args.targetAuthorUuid = cachedTarget.targetAuthorUuid;
+    return { targetAuthorUuid: cachedTarget.targetAuthorUuid };
+  }
+  if (cachedTarget?.targetAuthor) {
+    params.args.targetAuthor = cachedTarget.targetAuthor;
+    return { targetAuthor: cachedTarget.targetAuthor };
+  }
+  if (destination.recipient) {
+    params.args.targetAuthor = destination.recipient;
+    return { targetAuthor: destination.recipient };
   }
 
   throw new Error("targetAuthor or targetAuthorUuid required for Signal reactions.");
@@ -857,9 +861,8 @@ async function sendSignalPayloadOutbound(params: {
     });
     return { channel: SIGNAL_CHANNEL_ID, ...result };
   }
-  const tableMode = getSignalRuntime().channel.text.resolveMarkdownTableMode({
+  const tableMode = resolveSignalMarkdownTableMode({
     cfg: params.cfg,
-    channel: SIGNAL_CHANNEL_ID,
     accountId: params.accountId ?? undefined,
   });
   const chunks = markdownToSignalTextChunks(text, chunkLimit, { tableMode });

@@ -6,14 +6,14 @@ const MAX_ENTRIES = 5_000;
 const TTL_MS = 24 * 60 * 60 * 1000;
 
 type SignalReactionTargetCacheEntry = {
-  groupId: string;
+  conversationKey: string;
   messageId: string;
   targetAuthorUuid?: string;
   targetAuthor?: string;
   recordedAt: number;
 };
 
-const reactionTargetByGroupMessage = new Map<string, SignalReactionTargetCacheEntry>();
+const reactionTargetByMessage = new Map<string, SignalReactionTargetCacheEntry>();
 
 function normalizeGroupId(raw?: string): string | undefined {
   const trimmed = raw?.trim();
@@ -27,6 +27,26 @@ function normalizeGroupId(raw?: string): string | undefined {
       .replace(/^group:/i, "")
       .trim() || undefined
   );
+}
+
+function normalizeDirectRecipient(raw?: string): string | undefined {
+  const uuid = normalizeUuid(raw);
+  if (uuid) {
+    return `direct:uuid:${uuid}`;
+  }
+  const phone = normalizePhone(raw);
+  if (phone) {
+    return `direct:phone:${phone}`;
+  }
+  const trimmed = raw
+    ?.trim()
+    ?.replace(/^signal-custom:/i, "")
+    .replace(/^signal:/i, "")
+    .trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return `direct:raw:${trimmed.toLowerCase()}`;
 }
 
 function normalizeMessageId(raw?: string): string | undefined {
@@ -68,16 +88,16 @@ function makeKey(groupId: string, messageId: string): string {
 
 function pruneIfNeeded(): void {
   const now = Date.now();
-  for (const [key, value] of reactionTargetByGroupMessage.entries()) {
+  for (const [key, value] of reactionTargetByMessage.entries()) {
     if (now - value.recordedAt > TTL_MS) {
-      reactionTargetByGroupMessage.delete(key);
+      reactionTargetByMessage.delete(key);
     }
   }
-  if (reactionTargetByGroupMessage.size <= MAX_ENTRIES) {
+  if (reactionTargetByMessage.size <= MAX_ENTRIES) {
     return;
   }
-  const overflow = reactionTargetByGroupMessage.size - MAX_ENTRIES;
-  const sorted = Array.from(reactionTargetByGroupMessage.entries()).sort(
+  const overflow = reactionTargetByMessage.size - MAX_ENTRIES;
+  const sorted = Array.from(reactionTargetByMessage.entries()).sort(
     (
       a: [string, SignalReactionTargetCacheEntry],
       b: [string, SignalReactionTargetCacheEntry],
@@ -86,20 +106,35 @@ function pruneIfNeeded(): void {
   for (let i = 0; i < overflow; i += 1) {
     const key = sorted[i]?.[0];
     if (key) {
-      reactionTargetByGroupMessage.delete(key);
+      reactionTargetByMessage.delete(key);
     }
   }
 }
 
+function resolveConversationKey(params: {
+  groupId?: string;
+  recipient?: string;
+}): string | undefined {
+  const groupId = normalizeGroupId(params.groupId);
+  if (groupId) {
+    return `group:${groupId}`;
+  }
+  return normalizeDirectRecipient(params.recipient);
+}
+
 export function recordSignalReactionTarget(params: {
   groupId?: string;
+  recipient?: string;
   messageId?: string;
   senderId?: string;
   senderE164?: string;
 }): void {
-  const groupId = normalizeGroupId(params.groupId);
+  const conversationKey = resolveConversationKey({
+    groupId: params.groupId,
+    recipient: params.recipient,
+  });
   const messageId = normalizeMessageId(params.messageId);
-  if (!groupId || !messageId) {
+  if (!conversationKey || !messageId) {
     return;
   }
   const targetAuthorUuid = normalizeUuid(params.senderId);
@@ -107,8 +142,8 @@ export function recordSignalReactionTarget(params: {
   if (!targetAuthorUuid && !targetAuthor) {
     return;
   }
-  reactionTargetByGroupMessage.set(makeKey(groupId, messageId), {
-    groupId,
+  reactionTargetByMessage.set(makeKey(conversationKey, messageId), {
+    conversationKey,
     messageId,
     targetAuthorUuid,
     targetAuthor,
@@ -119,20 +154,24 @@ export function recordSignalReactionTarget(params: {
 
 export function resolveSignalReactionTarget(params: {
   groupId?: string;
+  recipient?: string;
   messageId?: string;
 }): { targetAuthorUuid?: string; targetAuthor?: string } | undefined {
-  const groupId = normalizeGroupId(params.groupId);
+  const conversationKey = resolveConversationKey({
+    groupId: params.groupId,
+    recipient: params.recipient,
+  });
   const messageId = normalizeMessageId(params.messageId);
-  if (!groupId || !messageId) {
+  if (!conversationKey || !messageId) {
     return undefined;
   }
-  const key = makeKey(groupId, messageId);
-  const hit = reactionTargetByGroupMessage.get(key);
+  const key = makeKey(conversationKey, messageId);
+  const hit = reactionTargetByMessage.get(key);
   if (!hit) {
     return undefined;
   }
   if (Date.now() - hit.recordedAt > TTL_MS) {
-    reactionTargetByGroupMessage.delete(key);
+    reactionTargetByMessage.delete(key);
     return undefined;
   }
   return {
@@ -142,5 +181,5 @@ export function resolveSignalReactionTarget(params: {
 }
 
 export function __clearSignalReactionTargetCacheForTests(): void {
-  reactionTargetByGroupMessage.clear();
+  reactionTargetByMessage.clear();
 }

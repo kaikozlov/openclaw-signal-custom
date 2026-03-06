@@ -64,6 +64,12 @@
 - [x] Port typing-stop callback for reply cleanup (`#26932`)
 - [ ] Review remaining lower-priority candidate (`#16085`)
 
+## Phase 6: Deferred UX Backlog
+
+- [ ] Add Telegram-style status reaction lifecycle for Signal
+- [ ] Improve sticker descriptions / sticker context rendering
+- [ ] Live-verify `signal-cli` multi-attachment behavior for non-image files before any bundling change
+
 ## Rules
 
 1. Copy first, shim second, rewrite last.
