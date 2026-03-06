@@ -36,6 +36,7 @@ const DEFAULT_RETRY_MIN_DELAY_MS = 500;
 const DEFAULT_RETRY_MAX_DELAY_MS = 10_000;
 const DEFAULT_RETRY_JITTER = 0.2;
 const socketClientRegistry = new Map<string, SignalSocketClient>();
+const receiveAccountParamSupportByBaseUrl = new Map<string, boolean>();
 
 export class SignalRpcError extends Error {
   readonly code: number | string;
@@ -151,6 +152,31 @@ export function resetSignalSocketRegistryForTests() {
     client.close();
   }
   socketClientRegistry.clear();
+  receiveAccountParamSupportByBaseUrl.clear();
+}
+
+function buildReceiveRpcParams(timeout: number, account?: string, includeAccount = false) {
+  return {
+    timeout,
+    ...(includeAccount && account ? { account } : {}),
+  };
+}
+
+function isUnsupportedReceiveAccountError(error: unknown): boolean {
+  if (!(error instanceof SignalRpcError)) {
+    return false;
+  }
+  return (
+    error.code === -32600 &&
+    /unrecognized field "account"|receiveparams\["account"\]/i.test(error.message)
+  );
+}
+
+function isMissingReceiveAccountError(error: unknown): boolean {
+  if (!(error instanceof SignalRpcError)) {
+    return false;
+  }
+  return error.code === -32600 && /requires valid account parameter/i.test(error.message);
 }
 
 function isTimeoutLikeError(error: unknown): boolean {
@@ -528,15 +554,37 @@ export async function pollSignalJsonRpc(params: {
   if (params.abortSignal?.aborted) {
     return;
   }
+  const baseUrl = normalizeBaseUrl(params.baseUrl);
   const timeout = Math.max(1, Math.trunc(params.pollTimeoutSec ?? 10));
-  const rpcParams: Record<string, unknown> = { timeout };
-  if (params.account) {
-    rpcParams.account = params.account;
+  const account = params.account?.trim() || undefined;
+  const cachedAccountSupport = account
+    ? receiveAccountParamSupportByBaseUrl.get(baseUrl)
+    : undefined;
+  const includeAccount = Boolean(account) && cachedAccountSupport !== false;
+
+  const requestReceive = (withAccount: boolean) =>
+    signalRpcRequest<unknown[]>("receive", buildReceiveRpcParams(timeout, account, withAccount), {
+      baseUrl,
+      timeoutMs: (timeout + 5) * 1000,
+    });
+
+  let results: unknown[];
+  try {
+    results = await requestReceive(includeAccount);
+    if (account) {
+      receiveAccountParamSupportByBaseUrl.set(baseUrl, includeAccount);
+    }
+  } catch (error) {
+    if (account && includeAccount && isUnsupportedReceiveAccountError(error)) {
+      receiveAccountParamSupportByBaseUrl.set(baseUrl, false);
+      results = await requestReceive(false);
+    } else if (account && !includeAccount && isMissingReceiveAccountError(error)) {
+      receiveAccountParamSupportByBaseUrl.set(baseUrl, true);
+      results = await requestReceive(true);
+    } else {
+      throw error;
+    }
   }
-  const results = await signalRpcRequest<unknown[]>("receive", rpcParams, {
-    baseUrl: params.baseUrl,
-    timeoutMs: (timeout + 5) * 1000,
-  });
   if (!Array.isArray(results)) {
     return;
   }

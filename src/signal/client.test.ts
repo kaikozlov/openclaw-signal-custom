@@ -225,6 +225,105 @@ describe("signal client typed errors and retry", () => {
     );
   });
 
+  it("falls back to receive without account when single-account daemons reject it", async () => {
+    const events: Array<{ event?: string; data?: string }> = [];
+    fetchMock
+      .mockResolvedValueOnce(
+        makeResponse({
+          text: JSON.stringify({
+            jsonrpc: "2.0",
+            error: {
+              code: -32600,
+              message:
+                'Unrecognized field "account" (class org.asamk.signal.commands.ReceiveCommand$ReceiveParams)',
+            },
+          }),
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeResponse({
+          text: JSON.stringify({
+            jsonrpc: "2.0",
+            result: [{ envelope: { sourceNumber: "+15550001111", dataMessage: { message: "hello" } } }],
+          }),
+        }),
+      );
+
+    await pollSignalJsonRpc({
+      baseUrl: "http://signal.local",
+      account: "+15559990000",
+      onEvent: (event) => events.push(event),
+      pollTimeoutSec: 1,
+    });
+
+    expect(events).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const firstRequest = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      params: Record<string, unknown>;
+    };
+    expect(firstRequest.params).toEqual(
+      expect.objectContaining({
+        account: "+15559990000",
+        timeout: 1,
+      }),
+    );
+    const secondRequest = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body)) as {
+      params: Record<string, unknown>;
+    };
+    expect(secondRequest.params).toEqual({ timeout: 1 });
+  });
+
+  it("remembers when receive must omit account for a base URL", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        makeResponse({
+          text: JSON.stringify({
+            jsonrpc: "2.0",
+            error: {
+              code: -32600,
+              message:
+                'Unrecognized field "account" (class org.asamk.signal.commands.ReceiveCommand$ReceiveParams)',
+            },
+          }),
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeResponse({
+          text: JSON.stringify({
+            jsonrpc: "2.0",
+            result: [],
+          }),
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeResponse({
+          text: JSON.stringify({
+            jsonrpc: "2.0",
+            result: [],
+          }),
+        }),
+      );
+
+    await pollSignalJsonRpc({
+      baseUrl: "http://signal.local",
+      account: "+15559990000",
+      onEvent: () => {},
+      pollTimeoutSec: 1,
+    });
+    await pollSignalJsonRpc({
+      baseUrl: "http://signal.local",
+      account: "+15559990000",
+      onEvent: () => {},
+      pollTimeoutSec: 1,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const cachedRequest = JSON.parse(String((fetchMock.mock.calls[2]?.[1] as RequestInit).body)) as {
+      params: Record<string, unknown>;
+    };
+    expect(cachedRequest.params).toEqual({ timeout: 1 });
+  });
+
   it("returns immediately from JSON-RPC polling when already aborted", async () => {
     const controller = new AbortController();
     controller.abort();
