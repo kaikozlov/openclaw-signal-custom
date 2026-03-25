@@ -1,4 +1,4 @@
-import { normalizeE164 } from "openclaw/plugin-sdk";
+import { normalizeE164 } from "../runtime-api.js";
 
 const SIGNAL_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PHONE_RE = /^\+?[0-9][0-9\s().-]*$/;

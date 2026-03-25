@@ -1,4 +1,4 @@
-import { normalizeE164 } from "openclaw/plugin-sdk";
+import { normalizeE164 } from "../runtime-api.js";
 
 export type SignalSender =
   | { kind: "phone"; raw: string; e164: string; uuid?: string }

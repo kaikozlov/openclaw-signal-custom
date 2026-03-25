@@ -5,7 +5,7 @@ import type {
   OpenClawConfig,
   ReplyPayload,
   RuntimeEnv,
-} from "openclaw/plugin-sdk";
+} from "../../runtime-api.js";
 import type { SignalReactionNotificationMode } from "../../config.js";
 import type { SignalSender } from "../identity.js";
 

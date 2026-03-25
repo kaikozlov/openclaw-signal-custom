@@ -22,13 +22,11 @@ import {
   readStringParam,
   setAccountEnabledInConfigSection,
   type ChannelGroupContext,
-  type ChannelMessageActionAdapter,
-  type ChannelMessageActionName,
   type ChannelPlugin,
   type GroupToolPolicyBySenderConfig,
   type GroupToolPolicyConfig,
   type ReplyPayload,
-} from "openclaw/plugin-sdk";
+} from "./runtime-api.js";
 import {
   getSignalConfig,
   listSignalAccountIds,
@@ -39,7 +37,6 @@ import {
   type ResolvedSignalAccount,
 } from "./config.js";
 import { SIGNAL_CHANNEL_ID, SIGNAL_META, stripSignalChannelPrefix } from "./constants.js";
-import { signalOnboardingAdapter } from "./onboarding.js";
 import { getSignalRuntime } from "./runtime.js";
 import {
   markdownToSignalTextChunks,
@@ -81,9 +78,9 @@ type ReactionToolContext = {
   currentMessageId?: string | number;
 };
 
-const signalMessageActions: ChannelMessageActionAdapter = {
-  listActions: ({ cfg }) => {
-    const actions = new Set<ChannelMessageActionName>();
+const signalMessageActions = {
+  listActions: ({ cfg }: { cfg: Parameters<typeof listSignalAccountIds>[0] }) => {
+    const actions = new Set<string>();
     const configuredAccounts = listSignalAccountIds(cfg)
       .map((accountId) => resolveSignalAccount({ cfg, accountId }))
       .filter((account) => account.enabled && account.configured);
@@ -134,7 +131,7 @@ const signalMessageActions: ChannelMessageActionAdapter = {
     }
     return Array.from(actions);
   },
-  supportsAction: ({ action }) =>
+  supportsAction: ({ action }: { action: string }) =>
     action === "react" ||
     action === "edit" ||
     action === "delete" ||
@@ -144,7 +141,7 @@ const signalMessageActions: ChannelMessageActionAdapter = {
     SIGNAL_GROUP_MANAGEMENT_ACTIONS.includes(
       action as (typeof SIGNAL_GROUP_MANAGEMENT_ACTIONS)[number],
     ),
-  handleAction: async (ctx) => {
+  handleAction: async (ctx: any) => {
     if (ctx.action === "edit") {
       const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
       if (!createSignalActionGate(actionConfig)("editMessage")) {
@@ -885,12 +882,15 @@ async function sendSignalPayloadOutbound(params: {
   return { channel: SIGNAL_CHANNEL_ID, ...lastResult };
 }
 
-export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
+type LegacySignalPlugin = ChannelPlugin<ResolvedSignalAccount> & {
+  actions?: typeof signalMessageActions;
+};
+
+const signalPluginImpl: ChannelPlugin<ResolvedSignalAccount> = {
   id: SIGNAL_CHANNEL_ID,
   meta: {
     ...meta,
   },
-  onboarding: signalOnboardingAdapter,
   pairing: {
     idLabel: "signalNumber",
     normalizeAllowEntry: (entry) => stripSignalChannelPrefix(entry),
@@ -908,7 +908,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     groupManagement: true,
     blockStreaming: true,
   },
-  actions: signalMessageActions,
+  actions: signalMessageActions as never,
   streaming: {
     blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
   },
@@ -1180,7 +1180,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         payload,
         mediaLocalRoots,
         accountId: accountId ?? undefined,
-        deps,
+        deps: deps as { sendSignal?: SignalSendFn } | undefined,
         silent: silent ?? undefined,
       });
     },
@@ -1192,7 +1192,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         accountId: accountId ?? undefined,
         silent: silent ?? undefined,
         replyTo: replyToId ?? undefined,
-        deps,
+        deps: deps as { sendSignal?: SignalSendFn } | undefined,
       });
       return { channel: SIGNAL_CHANNEL_ID, ...result };
     },
@@ -1216,7 +1216,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         accountId: accountId ?? undefined,
         silent: silent ?? undefined,
         replyTo: replyToId ?? undefined,
-        deps,
+        deps: deps as { sendSignal?: SignalSendFn } | undefined,
       });
       return { channel: SIGNAL_CHANNEL_ID, ...result };
     },
@@ -1270,3 +1270,5 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     },
   },
 };
+
+export const signalPlugin = signalPluginImpl as unknown as LegacySignalPlugin;

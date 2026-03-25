@@ -1,7 +1,7 @@
 import {
   looksLikeSignalTargetId,
   normalizeSignalMessagingTarget,
-} from "openclaw/plugin-sdk";
+} from "./runtime-api.js";
 import { stripSignalChannelPrefix } from "./constants.js";
 
 export function normalizeSignalCustomMessagingTarget(raw: string): string | undefined {

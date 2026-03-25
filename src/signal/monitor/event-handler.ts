@@ -11,7 +11,7 @@ import {
   recordPendingHistoryEntryIfEnabled,
   resolveControlCommandGate,
   resolveMentionGatingWithBypass,
-} from "openclaw/plugin-sdk";
+} from "../../runtime-api.js";
 import { SIGNAL_CHANNEL_ID } from "../../constants.js";
 import { getSignalRuntime } from "../../runtime.js";
 import { normalizeSignalCustomMessagingTarget } from "../../targets.js";

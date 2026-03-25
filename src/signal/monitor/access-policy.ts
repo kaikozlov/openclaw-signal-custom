@@ -1,10 +1,10 @@
 import {
-  createScopedPairingAccess,
-  issuePairingChallenge,
+  createChannelPairingChallengeIssuer,
+  readStoreAllowFromForDmPolicy,
+  upsertChannelPairingRequest,
   resolveDmGroupAccessWithLists,
-} from "openclaw/plugin-sdk";
+} from "../../runtime-api.js";
 import { SIGNAL_CHANNEL_ID } from "../../constants.js";
-import { getSignalRuntime } from "../../runtime.js";
 import { isSignalSenderAllowed, type SignalSender } from "../identity.js";
 
 type SignalDmPolicy = "open" | "pairing" | "allowlist" | "disabled";
@@ -14,15 +14,11 @@ async function readSignalStoreAllowFrom(params: {
   accountId: string;
   dmPolicy: SignalDmPolicy;
 }): Promise<string[]> {
-  if (params.dmPolicy === "allowlist") {
-    return [];
-  }
-  const pairing = createScopedPairingAccess({
-    core: getSignalRuntime(),
-    channel: SIGNAL_CHANNEL_ID,
+  return await readStoreAllowFromForDmPolicy({
+    provider: SIGNAL_CHANNEL_ID,
     accountId: params.accountId,
+    dmPolicy: params.dmPolicy,
   });
-  return await pairing.readAllowFromStore().catch(() => []);
 }
 
 export async function resolveSignalAccessState(params: {
@@ -77,21 +73,19 @@ export async function handleSignalDirectMessageAccess(params: {
     return false;
   }
   if (params.dmPolicy === "pairing") {
-    const pairing = createScopedPairingAccess({
-      core: getSignalRuntime(),
+    await createChannelPairingChallengeIssuer({
       channel: SIGNAL_CHANNEL_ID,
-      accountId: params.accountId,
-    });
-    await issuePairingChallenge({
-      channel: SIGNAL_CHANNEL_ID,
+      upsertPairingRequest: async ({ id, meta }) =>
+        await upsertChannelPairingRequest({
+          channel: SIGNAL_CHANNEL_ID,
+          id,
+          accountId: params.accountId,
+          meta,
+        }),
+    })({
       senderId: params.senderId,
       senderIdLine: params.senderIdLine,
       meta: { name: params.senderName },
-      upsertPairingRequest: async ({ id, meta }) =>
-        await pairing.upsertPairingRequest({
-          id,
-          meta,
-        }),
       sendPairingReply: params.sendPairingReply,
       onCreated: () => {
         params.log(`signal pairing request sender=${params.senderId}`);

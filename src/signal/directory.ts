@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "../runtime-api.js";
 import { signalRpcRequestWithRetry } from "./client.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
 

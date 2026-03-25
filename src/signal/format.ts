@@ -1,4 +1,4 @@
-import type { MarkdownTableMode } from "openclaw/plugin-sdk";
+import type { MarkdownTableMode } from "../runtime-api.js";
 import {
   chunkMarkdownIR,
   markdownToIR,

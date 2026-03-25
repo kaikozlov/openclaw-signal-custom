@@ -1,2 +1,4 @@
 node_modules/
+REFERENCE_UNTRACKED/
+.DS_Store
 SYNC_STATUS.md

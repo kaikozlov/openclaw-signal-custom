@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "../runtime-api.js";
 import { resolveSignalAccount, type SignalRetryConfig } from "../config.js";
 
 type SignalTransportConfig = {

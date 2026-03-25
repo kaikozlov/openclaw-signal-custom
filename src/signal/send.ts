@@ -1,4 +1,4 @@
-import { loadOutboundMediaFromUrl, type OpenClawConfig } from "openclaw/plugin-sdk";
+import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";
 import { SIGNAL_CHANNEL_ID, stripSignalChannelPrefix } from "../constants.js";
 import { resolveSignalAccount, resolveSignalMarkdownTableMode } from "../config.js";
 import { getSignalRuntime } from "../runtime.js";

@@ -1,5 +1,5 @@
 import MarkdownIt from "markdown-it";
-import { chunkTextForOutbound, type MarkdownTableMode } from "openclaw/plugin-sdk";
+import { chunkTextForOutbound, type MarkdownTableMode } from "../runtime-api.js";
 
 type ListState = {
   type: "bullet" | "ordered";

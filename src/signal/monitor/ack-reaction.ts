@@ -2,7 +2,7 @@ import {
   resolveAckReaction,
   shouldAckReaction,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk";
+} from "../../runtime-api.js";
 import { resolveSignalAccount } from "../../config.js";
 import { SIGNAL_CHANNEL_ID } from "../../constants.js";
 import { sendReactionSignal } from "../send-reactions.js";

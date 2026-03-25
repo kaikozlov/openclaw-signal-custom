@@ -1,9 +1,7 @@
-import type { ChannelMeta } from "openclaw/plugin-sdk";
-
 export const SIGNAL_CHANNEL_ID = "signal-custom";
 export const SIGNAL_LEGACY_CHANNEL_ID = "signal";
 
-export const SIGNAL_META: ChannelMeta = {
+export const SIGNAL_META = {
   id: SIGNAL_CHANNEL_ID,
   label: "Signal Custom",
   selectionLabel: "Signal Custom (signal-cli)",

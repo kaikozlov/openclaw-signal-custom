@@ -1,11 +1,9 @@
 import {
   DEFAULT_ACCOUNT_ID,
-  DmConfigSchema,
   type DmPolicy,
   DmPolicySchema,
   type GroupPolicy,
   GroupPolicySchema,
-  type MarkdownConfig,
   MarkdownConfigSchema,
   type MarkdownTableMode,
   ToolPolicySchema,
@@ -13,9 +11,14 @@ import {
   type GroupToolPolicyBySenderConfig,
   type GroupToolPolicyConfig,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk";
+  DmConfigSchema,
+} from "./runtime-api.js";
 import { z } from "zod";
 import { SIGNAL_CHANNEL_ID } from "./constants.js";
+
+type MarkdownConfig = Record<string, unknown> & {
+  tableMode?: MarkdownTableMode;
+};
 
 type ToolPolicyBySenderConfig = GroupToolPolicyBySenderConfig;
 

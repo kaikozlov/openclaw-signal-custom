@@ -7,7 +7,7 @@ import {
   type OpenClawConfig,
   type ReplyPayload,
   type RuntimeEnv,
-} from "openclaw/plugin-sdk";
+} from "../runtime-api.js";
 import type { SignalReactionNotificationMode } from "../config.js";
 import { resolveSignalAccount } from "../config.js";
 import { SIGNAL_CHANNEL_ID } from "../constants.js";
