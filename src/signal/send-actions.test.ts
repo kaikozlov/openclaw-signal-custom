@@ -153,6 +153,46 @@ describe("signal edit/delete actions", () => {
     );
   });
 
+  it("routes stickers to groups using signal-cli groupId params", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        jsonrpc: "2.0",
+        result: { timestamp: 1700000000012 },
+      }),
+    );
+
+    const cfg = {
+      channels: {
+        "signal-custom": {
+          account: "+15550001111",
+          httpUrl: "http://signal.local",
+        },
+      },
+    } as never;
+
+    await sendStickerSignal({
+      cfg,
+      to: "signal:group:group-1",
+      packId: "pack-1",
+      stickerId: 8,
+    });
+
+    const call = fetchMock.mock.calls[0];
+    const init = call?.[1] as RequestInit;
+    const body = JSON.parse(String(init.body)) as {
+      method: string;
+      params: Record<string, unknown>;
+    };
+    expect(body.params).toEqual(
+      expect.objectContaining({
+        account: "+15550001111",
+        groupId: "group-1",
+        sticker: "pack-1:8",
+      }),
+    );
+    expect(body.params.recipient).toBeUndefined();
+  });
+
   it("lists sticker packs from Signal RPC listStickerPacks", async () => {
     fetchMock.mockResolvedValueOnce(
       makeResponse({

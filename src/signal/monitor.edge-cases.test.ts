@@ -38,6 +38,7 @@ function installRuntime(overrides?: {
     defaultConfig?: Record<string, unknown>;
   };
   resolveRequireMention?: () => boolean;
+  shouldLogVerbose?: boolean;
 }) {
   const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async ({ ctx }: { ctx: Record<string, unknown> }) => ({
     queuedFinal: true,
@@ -123,7 +124,7 @@ function installRuntime(overrides?: {
       },
     },
     logging: {
-      shouldLogVerbose: () => false,
+      shouldLogVerbose: () => overrides?.shouldLogVerbose === true,
       getChildLogger: () =>
         ({
           info: () => {},
@@ -225,6 +226,36 @@ describe("signal monitor edge cases", () => {
     expect(
       (dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0] as { ctx: { ChatType?: string } }).ctx.ChatType,
     ).toBe("group");
+  });
+
+  it("logs inbound timing when verbose logging is enabled", async () => {
+    const log = vi.fn();
+    installRuntime({ shouldLogVerbose: true });
+    const handler = createHandler({
+      runtime: {
+        log,
+        error: () => {},
+        exit: () => {},
+      },
+    });
+
+    await handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Kai",
+          timestamp: 1700000000000,
+          dataMessage: {
+            message: "hello",
+          },
+        },
+      }),
+    });
+
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("signal inbound timing:"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("preprocess_ms="));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("dispatch_ms="));
   });
 
   it("accepts group dataMessage even when syncMessage object exists", async () => {

@@ -441,6 +441,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     replyToIsStory?: boolean;
     storyReplyTimestamp?: number;
     storyReplyAuthor?: string;
+    receivedAtMs: number;
+    preprocessMs?: number;
+    attachmentResolveMs?: number;
+    mergedEntryCount?: number;
   };
 
   const pluginRuntime = getSignalRuntime();
@@ -453,6 +457,20 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       deps.runtime.log?.(message);
     }
   };
+
+  function logInboundTiming(params: {
+    entry: SignalInboundEntry;
+    contextBuildMs: number;
+    dispatchMs: number;
+  }) {
+    if (!pluginRuntime.logging.shouldLogVerbose()) {
+      return;
+    }
+    const totalMs = Math.max(0, Date.now() - params.entry.receivedAtMs);
+    logVerbose(
+      `signal inbound timing: entries=${Math.max(1, params.entry.mergedEntryCount ?? 1)} preprocess_ms=${Math.max(0, params.entry.preprocessMs ?? 0)} attachments_ms=${Math.max(0, params.entry.attachmentResolveMs ?? 0)} context_ms=${params.contextBuildMs} dispatch_ms=${params.dispatchMs} total_ms=${totalMs}`,
+    );
+  }
 
   function enqueueSignalSystemEvent(params: {
     text: string;
@@ -555,6 +573,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   }
 
   async function handleSignalInboundMessage(entry: SignalInboundEntry) {
+    const contextStartedAt = Date.now();
     const fromLabel = formatInboundFromLabel({
       isGroup: entry.isGroup,
       groupLabel: entry.groupName ?? undefined,
@@ -831,6 +850,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
     });
 
+    const dispatchStartedAt = Date.now();
+    const contextBuildMs = Math.max(0, dispatchStartedAt - contextStartedAt);
     const { queuedFinal } =
       await pluginRuntime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
         ctx: ctxPayload,
@@ -884,6 +905,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             : undefined,
         },
       });
+    const dispatchMs = Math.max(0, Date.now() - dispatchStartedAt);
 
     if (statusReactionController) {
       if (!queuedFinal) {
@@ -898,6 +920,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     }
 
     if (!queuedFinal) {
+      logInboundTiming({
+        entry,
+        contextBuildMs,
+        dispatchMs,
+      });
       if (entry.isGroup && historyKey) {
         clearHistoryEntriesIfEnabled({
           historyMap: deps.groupHistories,
@@ -914,6 +941,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         limit: deps.historyLimit,
       });
     }
+    logInboundTiming({
+      entry,
+      contextBuildMs,
+      dispatchMs,
+    });
   }
 
   const { debouncer: inboundDebouncer } = createChannelInboundDebouncer<SignalInboundEntry>({
@@ -975,6 +1007,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         .map((entry) => entry.commandBody)
         .filter(Boolean)
         .join("\n");
+      const receivedAtMs = entries.reduce(
+        (min, entry) => Math.min(min, entry.receivedAtMs),
+        Number.POSITIVE_INFINITY,
+      );
+      const preprocessMs = entries.reduce((sum, entry) => sum + (entry.preprocessMs ?? 0), 0);
+      const attachmentResolveMs = entries.reduce(
+        (sum, entry) => sum + (entry.attachmentResolveMs ?? 0),
+        0,
+      );
       await handleSignalInboundMessage({
         ...last,
         bodyText: combinedText,
@@ -995,6 +1036,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         replyToIsQuote: undefined,
         editTargetTimestamp: undefined,
         isEdit: undefined,
+        receivedAtMs: Number.isFinite(receivedAtMs) ? receivedAtMs : Date.now(),
+        preprocessMs,
+        attachmentResolveMs,
+        mergedEntryCount: entries.length,
       });
     },
     onError: (err) => {
@@ -1496,6 +1541,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     }
     const storyMessage = envelope.storyMessage;
     if (storyMessage) {
+      const receivedAtMs = Date.now();
       if (deps.ignoreStories) {
         logVerbose("signal: skipping story message (ignoreStories=true)");
         return;
@@ -1525,6 +1571,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       let mediaType: string | undefined;
       let mediaPaths: string[] | undefined;
       let mediaTypes: string[] | undefined;
+      const storyAttachmentStartedAt = Date.now();
       if (storyMediaPromise) {
         const fetched = await storyMediaPromise;
         if (fetched) {
@@ -1534,6 +1581,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           mediaTypes = [mediaType ?? "application/octet-stream"];
         }
       }
+      const attachmentResolveMs = storyMediaPromise ? Math.max(0, Date.now() - storyAttachmentStartedAt) : 0;
       const storyText = storyMessage.textAttachment?.text?.trim() ?? "";
       const storyAuthor = sender.kind === "phone" ? (sender.uuid ?? senderRecipient) : sender.raw;
       const storyTimestamp = normalizeStoryTimestamp(envelope.timestamp);
@@ -1572,6 +1620,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         replyToIsStory: true,
         storyReplyTimestamp: storyMessage.allowsReplies === true ? storyTimestamp : undefined,
         storyReplyAuthor: storyMessage.allowsReplies === true ? storyAuthor : undefined,
+        receivedAtMs,
+        preprocessMs: Math.max(0, Date.now() - receivedAtMs),
+        attachmentResolveMs,
       });
       return;
     }
@@ -1672,6 +1723,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             groupId,
           })
         : null;
+    const receivedAtMs = Date.now();
 
     if (
       handleSignalControlOnlyInbound({
@@ -1838,6 +1890,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     let mediaDimension: { width?: number; height?: number } | undefined;
     let mediaDimensions: Array<{ width?: number; height?: number }> | undefined;
     let placeholder = "";
+    const attachmentStartedAt = Date.now();
     if (inboundMediaPromise) {
       ({
         mediaPath,
@@ -1850,6 +1903,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         mediaDimensions,
       } = await inboundMediaPromise);
     }
+    const attachmentResolveMs = inboundMediaPromise
+      ? Math.max(0, Date.now() - attachmentStartedAt)
+      : 0;
 
     const kind = resolveSignalMediaKind(mediaType ?? allAttachments[0]?.contentType ?? undefined);
     if (sticker) {
@@ -1960,6 +2016,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       replyToSender: quoteAuthor,
       replyToIsQuote: quote ? true : undefined,
       replyToIsStory: storyContextTimestamp !== undefined,
+      receivedAtMs,
+      preprocessMs: Math.max(0, Date.now() - receivedAtMs),
+      attachmentResolveMs,
     });
   };
 }

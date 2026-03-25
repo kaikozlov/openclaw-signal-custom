@@ -89,6 +89,75 @@ describe("sendMessageSignal", () => {
     );
   });
 
+  it("routes group sends through signal-cli groupId params", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        text: JSON.stringify({
+          jsonrpc: "2.0",
+          result: { timestamp: 1700000002004 },
+        }),
+      }),
+    );
+
+    await sendMessageSignal("signal:group:grp-123", "hello group", {
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15559990000",
+            httpUrl: "http://signal.local",
+          },
+        },
+      } as never,
+    });
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      params: Record<string, unknown>;
+    };
+    expect(body.params).toEqual(
+      expect.objectContaining({
+        account: "+15559990000",
+        message: "hello group",
+        groupId: "grp-123",
+      }),
+    );
+    expect(body.params.recipient).toBeUndefined();
+  });
+
+  it("routes username sends through signal-cli username params", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        text: JSON.stringify({
+          jsonrpc: "2.0",
+          result: { timestamp: 1700000002005 },
+        }),
+      }),
+    );
+
+    await sendMessageSignal("signal:username:kai", "hello username", {
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15559990000",
+            httpUrl: "http://signal.local",
+          },
+        },
+      } as never,
+    });
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      params: Record<string, unknown>;
+    };
+    expect(body.params).toEqual(
+      expect.objectContaining({
+        account: "+15559990000",
+        message: "hello username",
+        username: ["kai"],
+      }),
+    );
+    expect(body.params.recipient).toBeUndefined();
+    expect(body.params.groupId).toBeUndefined();
+  });
+
   it("defaults markdown tables to bullets for signal-custom", async () => {
     fetchMock.mockResolvedValueOnce(
       makeResponse({
@@ -247,6 +316,69 @@ describe("sendMessageSignal", () => {
           attachments: ["/tmp/openclaw-signal-custom-media/clip.txt"],
           recipient: ["+15550007777"],
           message: "",
+        }),
+      );
+    } finally {
+      await rm(mediaDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps attachment captions in the message body without placeholder text", async () => {
+    const mediaDir = await mkdtemp(path.join(tmpdir(), "signal-send-caption-"));
+    const mediaPath = path.join(mediaDir, "photo.png");
+    await writeFile(
+      mediaPath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a0QAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    const saveMediaBuffer = vi.fn(async () => ({
+      path: "/tmp/openclaw-signal-custom-media/photo.png",
+    }));
+    setSignalRuntime({
+      channel: {
+        media: {
+          saveMediaBuffer,
+        },
+        text: {
+          resolveMarkdownTableMode: () => "off",
+        },
+      },
+    } as never);
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        text: JSON.stringify({
+          jsonrpc: "2.0",
+          result: { timestamp: 1700000003004 },
+        }),
+      }),
+    );
+
+    try {
+      await sendMessageSignal("group:grp-caption", "**bold** photo", {
+        cfg: {
+          channels: {
+            "signal-custom": {
+              account: "+15559990000",
+              httpUrl: "http://signal.local",
+            },
+          },
+        } as never,
+        mediaUrl: pathToFileURL(mediaPath).href,
+        mediaLocalRoots: [mediaDir],
+      });
+
+      const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+        params: Record<string, unknown>;
+      };
+      expect(body.params).toEqual(
+        expect.objectContaining({
+          account: "+15559990000",
+          groupId: "grp-caption",
+          attachments: ["/tmp/openclaw-signal-custom-media/photo.png"],
+          message: "bold photo",
+          "text-style": ["0:4:BOLD"],
         }),
       );
     } finally {
