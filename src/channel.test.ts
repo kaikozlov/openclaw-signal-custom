@@ -645,10 +645,17 @@ describe("signalPlugin outbound sendMedia", () => {
     } as never;
     const actions = signalPlugin.actions?.describeMessageTool?.({ cfg })?.actions ?? [];
     expect(actions).toContain("renameGroup");
+    expect(actions).toContain("setGroupIcon");
     expect(actions).toContain("addParticipant");
     expect(actions).toContain("removeParticipant");
+    expect(actions).toContain("role-add");
+    expect(actions).toContain("role-remove");
+    expect(actions).toContain("ban");
+    expect(actions).toContain("channel-edit");
+    expect(actions).toContain("permissions");
     expect(actions).toContain("leaveGroup");
     expect(actions).toContain("member-info");
+    expect(actions).toContain("channel-info");
   });
 
   it("blocks group-management actions when actions.groupManagement is disabled", async () => {
@@ -920,6 +927,32 @@ describe("signalPlugin outbound sendMedia", () => {
 
   it.each([
     {
+      action: "channel-edit",
+      params: {
+        groupId: "signal:group:group-1",
+        description: "  Ops Room  ",
+      },
+      expectedMethod: "updateGroup",
+      expectedParams: {
+        groupId: "group-1",
+        description: "Ops Room",
+      },
+      expectedDetails: { ok: true, groupId: "group-1", description: "Ops Room" },
+    },
+    {
+      action: "setGroupIcon",
+      params: {
+        groupId: "signal:group:group-1",
+        avatar: "/tmp/group.png",
+      },
+      expectedMethod: "updateGroup",
+      expectedParams: {
+        groupId: "group-1",
+        avatar: "/tmp/group.png",
+      },
+      expectedDetails: { ok: true, groupId: "group-1", avatar: "/tmp/group.png" },
+    },
+    {
       action: "addParticipant",
       params: {
         groupId: "signal:group:group-1",
@@ -928,7 +961,7 @@ describe("signalPlugin outbound sendMedia", () => {
       expectedMethod: "updateGroup",
       expectedParams: {
         groupId: "group-1",
-        addMembers: ["member-1"],
+        member: ["member-1"],
       },
       expectedDetails: { ok: true, added: "signal:uuid:member-1", groupId: "group-1" },
     },
@@ -941,9 +974,162 @@ describe("signalPlugin outbound sendMedia", () => {
       expectedMethod: "updateGroup",
       expectedParams: {
         groupId: "group-1",
-        removeMembers: ["+15550002222"],
+        removeMember: ["+15550002222"],
       },
       expectedDetails: { ok: true, removed: "+15550002222", groupId: "group-1" },
+    },
+    {
+      action: "role-add",
+      params: {
+        groupId: "signal:group:group-1",
+        participant: "signal:+15550003333",
+      },
+      expectedMethod: "updateGroup",
+      expectedParams: {
+        groupId: "group-1",
+        admin: ["+15550003333"],
+      },
+      expectedDetails: { ok: true, promoted: "signal:+15550003333", groupId: "group-1" },
+    },
+    {
+      action: "role-remove",
+      params: {
+        groupId: "signal:group:group-1",
+        participant: "signal:uuid:admin-2",
+      },
+      expectedMethod: "updateGroup",
+      expectedParams: {
+        groupId: "group-1",
+        removeAdmin: ["admin-2"],
+      },
+      expectedDetails: { ok: true, demoted: "signal:uuid:admin-2", groupId: "group-1" },
+    },
+    {
+      action: "ban",
+      params: {
+        groupId: "signal:group:group-1",
+        participant: "+15550004444",
+      },
+      expectedMethod: "updateGroup",
+      expectedParams: {
+        groupId: "group-1",
+        ban: ["+15550004444"],
+      },
+      expectedDetails: { ok: true, banned: "+15550004444", groupId: "group-1" },
+    },
+    {
+      action: "ban",
+      params: {
+        groupId: "signal:group:group-1",
+        participant: "signal:uuid:banned-1",
+        unban: true,
+      },
+      expectedMethod: "updateGroup",
+      expectedParams: {
+        groupId: "group-1",
+        unban: ["banned-1"],
+      },
+      expectedDetails: { ok: true, unbanned: "signal:uuid:banned-1", groupId: "group-1" },
+    },
+    {
+      action: "channel-edit",
+      params: {
+        groupId: "signal:group:group-1",
+        state: "enabled-with-approval",
+      },
+      expectedMethod: "updateGroup",
+      expectedParams: {
+        groupId: "group-1",
+        link: "enabledWithApproval",
+      },
+      expectedDetails: { ok: true, groupId: "group-1", link: "enabledWithApproval" },
+    },
+    {
+      action: "channel-edit",
+      params: {
+        groupId: "signal:group:group-1",
+        resetLink: true,
+      },
+      expectedMethod: "updateGroup",
+      expectedParams: {
+        groupId: "group-1",
+        resetLink: true,
+      },
+      expectedDetails: { ok: true, groupId: "group-1", resetLink: true },
+    },
+    {
+      action: "permissions",
+      params: {
+        groupId: "signal:group:group-1",
+        setting: "add-member",
+        permission: "only-admins",
+      },
+      expectedMethod: "updateGroup",
+      expectedParams: {
+        groupId: "group-1",
+        setPermissionAddMember: "onlyAdmins",
+      },
+      expectedDetails: { ok: true, groupId: "group-1", setting: "add-member", permission: "onlyAdmins" },
+    },
+    {
+      action: "permissions",
+      params: {
+        groupId: "signal:group:group-1",
+        setting: "edit-details",
+        permission: "every-member",
+      },
+      expectedMethod: "updateGroup",
+      expectedParams: {
+        groupId: "group-1",
+        setPermissionEditDetails: "everyMember",
+      },
+      expectedDetails: { ok: true, groupId: "group-1", setting: "edit-details", permission: "everyMember" },
+    },
+    {
+      action: "permissions",
+      params: {
+        groupId: "signal:group:group-1",
+        setting: "send-messages",
+        permission: "only-admins",
+      },
+      expectedMethod: "updateGroup",
+      expectedParams: {
+        groupId: "group-1",
+        setPermissionSendMessages: "onlyAdmins",
+      },
+      expectedDetails: { ok: true, groupId: "group-1", setting: "send-messages", permission: "onlyAdmins" },
+    },
+    {
+      action: "permissions",
+      params: {
+        groupId: "signal:group:group-1",
+        enabled: true,
+      },
+      expectedMethod: "updateGroup",
+      expectedParams: {
+        groupId: "group-1",
+        setPermissionSendMessages: "onlyAdmins",
+      },
+      expectedDetails: {
+        ok: true,
+        groupId: "group-1",
+        setting: "announcements",
+        announcements: true,
+        permission: "onlyAdmins",
+      },
+    },
+    {
+      action: "channel-edit",
+      params: {
+        groupId: "signal:group:group-1",
+        seconds: 3600,
+      },
+      expectedMethod: "updateGroup",
+      expectedParams: {
+        groupId: "group-1",
+        expiration: 3600,
+      },
+      expectedDetails: { ok: true, groupId: "group-1", expiration: 3600 },
     },
     {
       action: "leaveGroup",
@@ -1051,6 +1237,72 @@ describe("signalPlugin outbound sendMedia", () => {
             ok: true,
             groupId: "group-1",
             members: [{ number: "+15550002222", name: "Alice" }],
+          }),
+        }),
+      );
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it("handles channel-info locally without runtime messageActions.handleAction", async () => {
+    const handleAction = vi.fn(async (_ctx: unknown) => ({ content: [] }));
+    setSignalRuntime({
+      channel: {
+        signal: {
+          messageActions: {
+            handleAction,
+          },
+        },
+      },
+    } as never);
+
+    const originalFetch = global.fetch;
+    const fetchMock = vi.fn<typeof fetch>();
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        jsonrpc: "2.0",
+        result: [
+          { id: "group-2", name: "Ignore Me" },
+          {
+            id: "group-1",
+            name: "Ops",
+            description: "Operators",
+            groupInviteLink: "https://signal.group/#ops",
+            permissionSendMessage: "ONLY_ADMINS",
+          },
+        ],
+      }),
+    );
+    global.fetch = fetchMock;
+    try {
+      const result = await signalPlugin.actions?.handleAction?.({
+        channel: "signal-custom",
+        action: "channel-info",
+        cfg: makeSignalCfg(),
+        params: {
+          groupId: "signal:group:group-1",
+        },
+      } as never);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(handleAction).not.toHaveBeenCalled();
+      const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+        method: string;
+        params: Record<string, unknown>;
+      };
+      expect(body.method).toBe("listGroups");
+      expect(body.params).toEqual(expect.objectContaining({ detailed: true }));
+      expect(result).toEqual(
+        expect.objectContaining({
+          details: expect.objectContaining({
+            ok: true,
+            groupId: "group-1",
+            group: expect.objectContaining({
+              id: "group-1",
+              description: "Operators",
+              groupInviteLink: "https://signal.group/#ops",
+            }),
           }),
         }),
       );

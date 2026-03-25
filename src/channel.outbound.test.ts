@@ -232,6 +232,111 @@ describe("signal outbound cfg threading", () => {
     expect(result).toEqual({ channel: "signal-custom", messageId: "sig-2" });
   });
 
+  it("forwards view-once payload channelData for a single media attachment", async () => {
+    const cfg = { channels: { "signal-custom": {} } };
+    const sendSignal = vi.fn(async () => ({ messageId: "sig-view-once" }));
+
+    const sendPayload = signalPlugin.outbound!.sendPayload;
+    if (!sendPayload) {
+      throw new Error("signal outbound sendPayload is unavailable");
+    }
+
+    const result = await sendPayload({
+      cfg,
+      to: "+15554440123",
+      text: "photo",
+      payload: {
+        text: "photo",
+        mediaUrl: "https://example.com/a.jpg",
+        channelData: {
+          "signal-custom": {
+            viewOnce: true,
+          },
+        },
+      },
+      deps: { sendSignal },
+    });
+
+    expect(sendSignal).toHaveBeenCalledWith(
+      "+15554440123",
+      "photo",
+      expect.objectContaining({
+        cfg,
+        mediaUrl: "https://example.com/a.jpg",
+        viewOnce: true,
+      }),
+    );
+    expect(result).toEqual({ channel: "signal-custom", messageId: "sig-view-once" });
+  });
+
+  it("rejects view-once payloads with multiple media attachments", async () => {
+    const cfg = { channels: { "signal-custom": {} } };
+    const sendSignal = vi.fn(async () => ({ messageId: "sig-nope" }));
+
+    const sendPayload = signalPlugin.outbound!.sendPayload;
+    if (!sendPayload) {
+      throw new Error("signal outbound sendPayload is unavailable");
+    }
+
+    await expect(
+      sendPayload({
+        cfg,
+        to: "+15554440124",
+        text: "photo batch",
+        payload: {
+          text: "photo batch",
+          mediaUrls: ["https://example.com/a.jpg", "https://example.com/b.jpg"],
+          channelData: {
+            "signal-custom": {
+              viewOnce: true,
+            },
+          },
+        },
+        deps: { sendSignal },
+      }),
+    ).rejects.toThrow(/exactly one media attachment/i);
+    expect(sendSignal).not.toHaveBeenCalled();
+  });
+
+  it("forwards story reply channelData on payload sends", async () => {
+    const cfg = { channels: { "signal-custom": {} } };
+    const sendSignal = vi.fn(async () => ({ messageId: "sig-story" }));
+
+    const sendPayload = signalPlugin.outbound!.sendPayload;
+    if (!sendPayload) {
+      throw new Error("signal outbound sendPayload is unavailable");
+    }
+
+    const result = await sendPayload({
+      cfg,
+      to: "+15554440125",
+      text: "story reply",
+      payload: {
+        text: "story reply",
+        channelData: {
+          "signal-custom": {
+            storyReply: {
+              timestamp: 1700000001111,
+              authorUuid: "signal:uuid:123e4567-e89b-12d3-a456-426614174000",
+            },
+          },
+        },
+      },
+      deps: { sendSignal },
+    });
+
+    expect(sendSignal).toHaveBeenCalledWith(
+      "+15554440125",
+      "story reply",
+      expect.objectContaining({
+        cfg,
+        storyTimestamp: 1700000001111,
+        storyAuthor: "123e4567-e89b-12d3-a456-426614174000",
+      }),
+    );
+    expect(result).toEqual({ channel: "signal-custom", messageId: "sig-story" });
+  });
+
   it("rejects invalid payload mention ranges", async () => {
     const cfg = { channels: { "signal-custom": {} } };
     const sendSignal = vi.fn(async () => ({ messageId: "sig-5" }));
@@ -306,6 +411,102 @@ describe("signal outbound cfg threading", () => {
       }),
     );
     expect(result).toEqual({ channel: "signal-custom", messageId: "sig-6" });
+  });
+
+  it("formats markdown captions for media payloads when mentions are absent", async () => {
+    const cfg = {
+      channels: {
+        "signal-custom": {
+          account: "+15559990000",
+          httpUrl: "http://signal.local",
+        },
+      },
+    };
+    const sendSignal = vi.fn(async () => ({ messageId: "sig-7" }));
+    setSignalRuntime({
+      channel: {
+        text: {
+          resolveMarkdownTableMode: () => "off",
+        },
+      },
+    } as never);
+
+    const sendPayload = signalPlugin.outbound!.sendPayload;
+    if (!sendPayload) {
+      throw new Error("signal outbound sendPayload is unavailable");
+    }
+
+    const result = await sendPayload({
+      cfg,
+      to: "+15550004567",
+      text: "**bold** photo",
+      payload: {
+        text: "**bold** photo",
+        mediaUrl: "https://example.com/photo.jpg",
+      },
+      deps: { sendSignal },
+    });
+
+    expect(sendSignal).toHaveBeenCalledWith(
+      "+15550004567",
+      "bold photo",
+      expect.objectContaining({
+        cfg,
+        mediaUrl: "https://example.com/photo.jpg",
+        textMode: "plain",
+        textStyles: [{ start: 0, length: 4, style: "BOLD" }],
+      }),
+    );
+    expect(result).toEqual({ channel: "signal-custom", messageId: "sig-7" });
+  });
+
+  it("keeps reply threading only on the first formatted text chunk", async () => {
+    const cfg = { channels: { "signal-custom": {} } };
+    const sendSignal = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "sig-8a" })
+      .mockResolvedValueOnce({ messageId: "sig-8b" });
+    const text = `${"a".repeat(3999)}\n\n${"b".repeat(100)}`;
+
+    const sendPayload = signalPlugin.outbound!.sendPayload;
+    if (!sendPayload) {
+      throw new Error("signal outbound sendPayload is unavailable");
+    }
+
+    const result = await sendPayload({
+      cfg,
+      to: "+15550006666",
+      text,
+      payload: {
+        text,
+        replyToId: "1700000002000",
+      },
+      deps: { sendSignal },
+    });
+
+    expect(sendSignal).toHaveBeenCalledTimes(2);
+    expect(sendSignal).toHaveBeenNthCalledWith(
+      1,
+      "+15550006666",
+      expect.any(String),
+      expect.objectContaining({
+        cfg,
+        replyTo: "1700000002000",
+        textMode: "plain",
+      }),
+    );
+    expect(sendSignal).toHaveBeenNthCalledWith(
+      2,
+      "+15550006666",
+      expect.any(String),
+      expect.objectContaining({
+        cfg,
+        textMode: "plain",
+      }),
+    );
+    const secondOpts = sendSignal.mock.calls[1]?.[2] as { replyTo?: string } | undefined;
+    expect(secondOpts?.replyTo).toBeUndefined();
+    expect(result).toEqual({ channel: "signal-custom", messageId: "sig-8b" });
   });
 
   it("uses the local sender over TCP for the default sendText path", async () => {

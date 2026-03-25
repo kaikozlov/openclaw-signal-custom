@@ -12,13 +12,15 @@ function isNeverSignalReaction(
 function installRuntime(overrides?: {
   hasControlCommand?: (text: string) => boolean;
   matchesMentionPatterns?: (text: string) => boolean;
+  dispatchImpl?: (params: { ctx: Record<string, unknown>; dispatcherOptions: Record<string, unknown> }) => Promise<Record<string, unknown>>;
 }) {
   const dispatchReplyWithBufferedBlockDispatcher = vi.fn(
-    async ({ ctx }: { ctx: Record<string, unknown> }) => ({
-      queuedFinal: true,
-      counts: { tool: 0, block: 0, final: 1 },
-      ctx,
-    }),
+    async (params: { ctx: Record<string, unknown>; dispatcherOptions: Record<string, unknown> }) =>
+      (await overrides?.dispatchImpl?.(params)) ?? {
+        queuedFinal: true,
+        counts: { tool: 0, block: 0, final: 1 },
+        ctx: params.ctx,
+      },
   );
 
   setSignalRuntime({
@@ -482,5 +484,73 @@ describe("signal monitor rich inbound context", () => {
     expect(ctx?.MediaPath).toBe("/tmp/two.png");
     expect(ctx?.MediaPaths).toEqual(["/tmp/two.png"]);
     expect(ctx?.MediaTypes).toEqual(["image/png"]);
+  });
+
+  it("captures story reply context on ordinary inbound messages", async () => {
+    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime();
+    const handler = createHandler();
+
+    await handler(
+      makeReceiveEvent({
+        message: "nice story",
+        storyContext: {
+          authorNumber: "+15551234567",
+          sentTimestamp: 1700000001111,
+        },
+      }),
+    );
+
+    const ctx = capturedCtx(dispatchReplyWithBufferedBlockDispatcher);
+    expect(ctx?.ReplyToIsStory).toBe(true);
+    expect(ctx?.UntrustedContext).toEqual(
+      expect.arrayContaining([
+        "Signal story context: author +15551234567, timestamp 1700000001111",
+      ]),
+    );
+  });
+
+  it("ingests story messages and threads story reply metadata when replies are enabled", async () => {
+    const deliverReplies = vi.fn(async () => {});
+    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
+      dispatchImpl: async ({ ctx, dispatcherOptions }) => {
+        const deliver = dispatcherOptions.deliver as ((payload: { text: string }) => Promise<void>) | undefined;
+        await deliver?.({ text: "replying to story" });
+        return {
+          queuedFinal: true,
+          counts: { tool: 0, block: 0, final: 1 },
+          ctx,
+        };
+      },
+    });
+    const handler = createHandler({ deliverReplies });
+
+    await handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Kai",
+          timestamp: 1700000002222,
+          storyMessage: {
+            allowsReplies: true,
+            textAttachment: {
+              text: "Story update",
+            },
+          },
+        },
+      }),
+    });
+
+    const ctx = capturedCtx(dispatchReplyWithBufferedBlockDispatcher);
+    expect(ctx?.BodyForCommands).toBe("Story update");
+    expect(ctx?.ReplyToIsStory).toBe(true);
+    expect(ctx?.StoryReplyTimestamp).toBe(1700000002222);
+    expect(ctx?.StoryReplyAuthor).toBe("+15550001111");
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storyTimestamp: 1700000002222,
+        storyAuthor: "+15550001111",
+      }),
+    );
   });
 });

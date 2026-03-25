@@ -1,50 +1,27 @@
 import {
-  applyAccountNameToChannelSection,
-  buildBaseAccountStatusSnapshot,
-  buildBaseChannelStatusSummary,
-  buildChannelConfigSchema,
+  createChatChannelPlugin,
   collectStatusIssuesFromLastError,
   createActionGate,
-  createDefaultChannelRuntimeState,
-  DEFAULT_ACCOUNT_ID,
-  deleteAccountFromConfigSection,
-  formatPairingApproveHint,
   jsonResult,
-  migrateBaseNameToDefaultAccount,
-  normalizeAccountId,
   normalizeE164,
   PAIRING_APPROVED_MESSAGE,
   readNumberParam,
-  resolveChannelMediaMaxBytes,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
   readStringParam,
   resolveReactionMessageId,
-  setAccountEnabledInConfigSection,
   type ChannelMessageActionAdapter,
   type ChannelMessageActionName,
   type ChannelGroupContext,
-  type ChannelPlugin,
   type GroupToolPolicyBySenderConfig,
   type GroupToolPolicyConfig,
-  type ReplyPayload,
 } from "./runtime-api.js";
 import {
-  getSignalConfig,
   listSignalAccountIds,
-  resolveDefaultSignalAccountId,
   resolveSignalAccount,
-  SignalConfigSchema,
-  resolveSignalMarkdownTableMode,
   type ResolvedSignalAccount,
 } from "./config.js";
-import { SIGNAL_CHANNEL_ID, SIGNAL_META, stripSignalChannelPrefix } from "./constants.js";
+import { SIGNAL_CHANNEL_ID, stripSignalChannelPrefix } from "./constants.js";
 import { getSignalRuntime } from "./runtime.js";
-import { chunkTextForOutbound } from "./text-chunking.js";
-import {
-  markdownToSignalTextChunks,
-  type SignalTextStyleRange,
-} from "./signal/format.js";
+import { createSignalCustomPluginBase } from "./shared.js";
 import {
   deleteMessageSignal,
   editMessageSignal,
@@ -54,9 +31,6 @@ import {
 import {
   sendMessageSignal,
   sendPollCreateSignal,
-  type SignalMentionRange,
-  type SignalSendOpts,
-  type SignalSendResult,
 } from "./signal/send.js";
 import {
   resolveSignalReactionTarget as resolveCachedSignalReactionTarget,
@@ -65,17 +39,25 @@ import { removeReactionSignal, sendReactionSignal } from "./signal/send-reaction
 import { listSignalContacts, listSignalGroups } from "./signal/directory.js";
 import {
   addGroupMemberSignal,
+  addGroupAdminSignal,
+  banGroupMemberSignal,
+  getGroupInfoSignal,
   listGroupMembersSignal,
   quitGroupSignal,
+  removeGroupAdminSignal,
   removeGroupMemberSignal,
+  unbanGroupMemberSignal,
   updateGroupSignal,
 } from "./signal/groups.js";
-import { probeSignal } from "./signal/probe.js";
-import { monitorSignalProvider } from "./signal/monitor.js";
 import {
+  inferSignalCustomTargetChatType,
   looksLikeSignalCustomTargetId,
   normalizeSignalCustomMessagingTarget,
+  parseSignalCustomExplicitTarget,
+  resolveSignalCustomOutboundSessionRoute,
 } from "./targets.js";
+import { type SignalProbe } from "./signal/probe.js";
+import { signalOutboundBase } from "./outbound.js";
 
 type ReactionToolContext = {
   currentMessageId?: string | number;
@@ -83,10 +65,17 @@ type ReactionToolContext = {
 
 const SIGNAL_GROUP_MANAGEMENT_ACTIONS = [
   "renameGroup",
+  "setGroupIcon",
   "addParticipant",
   "removeParticipant",
+  "role-add",
+  "role-remove",
+  "ban",
+  "channel-edit",
+  "permissions",
   "leaveGroup",
   "member-info",
+  "channel-info",
 ] as const;
 
 const SIGNAL_LOCAL_MESSAGE_ACTIONS = [
@@ -154,7 +143,8 @@ const signalMessageActions: ChannelMessageActionAdapter = {
       action as (typeof SIGNAL_LOCAL_MESSAGE_ACTIONS)[number],
     ),
   handleAction: async (ctx) => {
-    if (ctx.action === "edit") {
+    const action = String(ctx.action);
+    if (action === "edit") {
       const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
       if (!createSignalActionGate(actionConfig)("editMessage")) {
         throw new Error("Signal edit is disabled via actions.editMessage.");
@@ -178,9 +168,9 @@ const signalMessageActions: ChannelMessageActionAdapter = {
       });
       return jsonResult({ ok: true, edited: true, messageId });
     }
-    if (ctx.action === "delete" || ctx.action === "unsend") {
+    if (action === "delete" || action === "unsend") {
       const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
-      if (ctx.action === "unsend") {
+      if (action === "unsend") {
         if (!createSignalActionGate(actionConfig)("unsend")) {
           throw new Error("Signal unsend is disabled via actions.unsend.");
         }
@@ -201,7 +191,7 @@ const signalMessageActions: ChannelMessageActionAdapter = {
       });
       return jsonResult({ ok: true, deleted: true, messageId });
     }
-    if (ctx.action === "sticker") {
+    if (action === "sticker") {
       const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
       if (!createSignalActionGate(actionConfig)("stickers", false)) {
         throw new Error("Signal sticker actions are disabled via actions.stickers.");
@@ -223,7 +213,7 @@ const signalMessageActions: ChannelMessageActionAdapter = {
         stickerId,
       });
     }
-    if (ctx.action === "sticker-search") {
+    if (action === "sticker-search") {
       const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
       if (!createSignalActionGate(actionConfig)("stickers", false)) {
         throw new Error("Signal sticker actions are disabled via actions.stickers.");
@@ -252,7 +242,7 @@ const signalMessageActions: ChannelMessageActionAdapter = {
         typeof limit === "number" && limit > 0 ? filtered.slice(0, Math.trunc(limit)) : filtered;
       return jsonResult({ ok: true, packs: capped });
     }
-    if (ctx.action === "renameGroup") {
+    if (action === "renameGroup") {
       const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
       if (!createSignalActionGate(actionConfig)("groupManagement")) {
         throw new Error("Signal group management is disabled via actions.groupManagement.");
@@ -269,47 +259,234 @@ const signalMessageActions: ChannelMessageActionAdapter = {
       );
       return jsonResult({ ok: true, renamed: groupId, name: name.trim() });
     }
-    if (ctx.action === "addParticipant") {
+    if (action === "channel-edit") {
       const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
       if (!createSignalActionGate(actionConfig)("groupManagement")) {
         throw new Error("Signal group management is disabled via actions.groupManagement.");
       }
       const groupId = readSignalGroupIdParam(ctx.params);
-      const member =
-        readStringParam(ctx.params, "participant") ??
-        readStringParam(ctx.params, "member") ??
-        readStringParam(ctx.params, "address");
-      if (!member?.trim()) {
-        throw new Error("Signal addParticipant requires participant parameter (phone number or UUID).");
+      const description = readStringParam(ctx.params, "description");
+      if (description?.trim()) {
+        await updateGroupSignal(
+          groupId,
+          { description: description.trim() },
+          { cfg: ctx.cfg, accountId: ctx.accountId ?? undefined },
+        );
+        return jsonResult({ ok: true, groupId, description: description.trim() });
       }
-      await addGroupMemberSignal(groupId, member.trim(), {
+      const linkInput =
+        readStringParam(ctx.params, "linkState") ??
+        readStringParam(ctx.params, "state") ??
+        readStringParam(ctx.params, "link");
+      if (linkInput?.trim()) {
+        const link = normalizeSignalGroupLinkState(linkInput);
+        await updateGroupSignal(
+          groupId,
+          { link },
+          { cfg: ctx.cfg, accountId: ctx.accountId ?? undefined },
+        );
+        return jsonResult({ ok: true, groupId, link });
+      }
+      const shouldResetLink =
+        typeof ctx.params.resetLink === "boolean"
+          ? ctx.params.resetLink
+          : typeof ctx.params.resetLink === "string"
+            ? ["true", "1", "yes", "on"].includes(ctx.params.resetLink.trim().toLowerCase())
+            : false;
+      if (shouldResetLink) {
+        await updateGroupSignal(
+          groupId,
+          { resetLink: true },
+          { cfg: ctx.cfg, accountId: ctx.accountId ?? undefined },
+        );
+        return jsonResult({ ok: true, groupId, resetLink: true });
+      }
+      const expiration =
+        readNumberParam(ctx.params, "expiration", { integer: true }) ??
+        readNumberParam(ctx.params, "seconds", { integer: true });
+      if (typeof expiration === "number") {
+        if (!Number.isFinite(expiration) || expiration < 0) {
+          throw new Error("Signal channel-edit expiration must be a non-negative integer.");
+        }
+        const normalizedExpiration = Math.trunc(expiration);
+        await updateGroupSignal(
+          groupId,
+          { expiration: normalizedExpiration },
+          { cfg: ctx.cfg, accountId: ctx.accountId ?? undefined },
+        );
+        return jsonResult({ ok: true, groupId, expiration: normalizedExpiration });
+      }
+      throw new Error(
+        "Signal channel-edit requires one of: description, linkState/state/link, resetLink=true, or expiration/seconds.",
+      );
+    }
+    if (action === "setGroupIcon") {
+      const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
+      if (!createSignalActionGate(actionConfig)("groupManagement")) {
+        throw new Error("Signal group management is disabled via actions.groupManagement.");
+      }
+      const groupId = readSignalGroupIdParam(ctx.params);
+      const avatar =
+        readStringParam(ctx.params, "avatar") ??
+        readStringParam(ctx.params, "path") ??
+        readStringParam(ctx.params, "file", {
+          required: true,
+          allowEmpty: false,
+          label: "avatar path",
+        });
+      await updateGroupSignal(
+        groupId,
+        { avatar: avatar.trim() },
+        { cfg: ctx.cfg, accountId: ctx.accountId ?? undefined },
+      );
+      return jsonResult({ ok: true, groupId, avatar: avatar.trim() });
+    }
+    if (action === "addParticipant") {
+      const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
+      if (!createSignalActionGate(actionConfig)("groupManagement")) {
+        throw new Error("Signal group management is disabled via actions.groupManagement.");
+      }
+      const groupId = readSignalGroupIdParam(ctx.params);
+      const member = readSignalParticipantParam(ctx.params, "addParticipant");
+      await addGroupMemberSignal(groupId, member, {
         cfg: ctx.cfg,
         accountId: ctx.accountId ?? undefined,
       });
-      return jsonResult({ ok: true, added: member.trim(), groupId });
+      return jsonResult({ ok: true, added: member, groupId });
     }
-    if (ctx.action === "removeParticipant") {
+    if (action === "removeParticipant") {
       const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
       if (!createSignalActionGate(actionConfig)("groupManagement")) {
         throw new Error("Signal group management is disabled via actions.groupManagement.");
       }
       const groupId = readSignalGroupIdParam(ctx.params);
-      const member =
-        readStringParam(ctx.params, "participant") ??
-        readStringParam(ctx.params, "member") ??
-        readStringParam(ctx.params, "address");
-      if (!member?.trim()) {
+      const member = readSignalParticipantParam(ctx.params, "removeParticipant");
+      await removeGroupMemberSignal(groupId, member, {
+        cfg: ctx.cfg,
+        accountId: ctx.accountId ?? undefined,
+      });
+      return jsonResult({ ok: true, removed: member, groupId });
+    }
+    if (action === "role-add") {
+      const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
+      if (!createSignalActionGate(actionConfig)("groupManagement")) {
+        throw new Error("Signal group management is disabled via actions.groupManagement.");
+      }
+      const groupId = readSignalGroupIdParam(ctx.params);
+      const member = readSignalParticipantParam(ctx.params, "role-add");
+      await addGroupAdminSignal(groupId, member, {
+        cfg: ctx.cfg,
+        accountId: ctx.accountId ?? undefined,
+      });
+      return jsonResult({ ok: true, promoted: member, groupId });
+    }
+    if (action === "role-remove") {
+      const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
+      if (!createSignalActionGate(actionConfig)("groupManagement")) {
+        throw new Error("Signal group management is disabled via actions.groupManagement.");
+      }
+      const groupId = readSignalGroupIdParam(ctx.params);
+      const member = readSignalParticipantParam(ctx.params, "role-remove");
+      await removeGroupAdminSignal(groupId, member, {
+        cfg: ctx.cfg,
+        accountId: ctx.accountId ?? undefined,
+      });
+      return jsonResult({ ok: true, demoted: member, groupId });
+    }
+    if (action === "ban") {
+      const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
+      if (!createSignalActionGate(actionConfig)("groupManagement")) {
+        throw new Error("Signal group management is disabled via actions.groupManagement.");
+      }
+      const groupId = readSignalGroupIdParam(ctx.params);
+      const member = readSignalParticipantParam(
+        ctx.params,
+        typeof ctx.params.unban === "boolean" && ctx.params.unban ? "unban" : "ban",
+      );
+      const shouldUnban =
+        (typeof ctx.params.unban === "boolean" && ctx.params.unban) ||
+        (typeof ctx.params.remove === "boolean" && ctx.params.remove) ||
+        (typeof ctx.params.mode === "string" && ctx.params.mode.trim().toLowerCase() === "unban");
+      if (shouldUnban) {
+        await unbanGroupMemberSignal(groupId, member, {
+          cfg: ctx.cfg,
+          accountId: ctx.accountId ?? undefined,
+        });
+        return jsonResult({ ok: true, unbanned: member, groupId });
+      }
+      await banGroupMemberSignal(groupId, member, {
+        cfg: ctx.cfg,
+        accountId: ctx.accountId ?? undefined,
+      });
+      return jsonResult({ ok: true, banned: member, groupId });
+    }
+    if (action === "permissions") {
+      const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
+      if (!createSignalActionGate(actionConfig)("groupManagement")) {
+        throw new Error("Signal group management is disabled via actions.groupManagement.");
+      }
+      const groupId = readSignalGroupIdParam(ctx.params);
+      const permissionSetting =
+        readStringParam(ctx.params, "setting") ??
+        readStringParam(ctx.params, "permissionType") ??
+        readStringParam(ctx.params, "scope");
+      if (permissionSetting?.trim()) {
+        const normalizedSetting = permissionSetting.trim().toLowerCase();
+        const permission = readSignalGroupPermissionParam(ctx.params);
+        if (normalizedSetting === "add-member" || normalizedSetting === "addmember") {
+          await updateGroupSignal(
+            groupId,
+            { permissionAddMember: permission },
+            { cfg: ctx.cfg, accountId: ctx.accountId ?? undefined },
+          );
+          return jsonResult({ ok: true, groupId, setting: "add-member", permission });
+        }
+        if (normalizedSetting === "edit-details" || normalizedSetting === "editdetails") {
+          await updateGroupSignal(
+            groupId,
+            { permissionEditDetails: permission },
+            { cfg: ctx.cfg, accountId: ctx.accountId ?? undefined },
+          );
+          return jsonResult({ ok: true, groupId, setting: "edit-details", permission });
+        }
+        if (
+          normalizedSetting === "send-messages" ||
+          normalizedSetting === "sendmessages" ||
+          normalizedSetting === "announcements"
+        ) {
+          await updateGroupSignal(
+            groupId,
+            { permissionSendMessages: permission },
+            { cfg: ctx.cfg, accountId: ctx.accountId ?? undefined },
+          );
+          return jsonResult({
+            ok: true,
+            groupId,
+            setting: normalizedSetting === "announcements" ? "announcements" : "send-messages",
+            permission,
+            ...(normalizedSetting === "announcements"
+              ? { announcements: permission === "onlyAdmins" }
+              : {}),
+          });
+        }
         throw new Error(
-          "Signal removeParticipant requires participant parameter (phone number or UUID).",
+          'Signal permissions setting must be "add-member", "edit-details", "send-messages", or "announcements".',
         );
       }
-      await removeGroupMemberSignal(groupId, member.trim(), {
-        cfg: ctx.cfg,
-        accountId: ctx.accountId ?? undefined,
-      });
-      return jsonResult({ ok: true, removed: member.trim(), groupId });
+      const enabled = readSignalBooleanParam(
+        ctx.params,
+        ["enabled", "announcement", "announcementMode", "value"],
+        "permissions",
+      );
+      const permission = enabled ? "onlyAdmins" : "everyMember";
+      await updateGroupSignal(
+        groupId,
+        { permissionSendMessages: permission },
+        { cfg: ctx.cfg, accountId: ctx.accountId ?? undefined },
+      );
+      return jsonResult({ ok: true, groupId, setting: "announcements", announcements: enabled, permission });
     }
-    if (ctx.action === "leaveGroup") {
+    if (action === "leaveGroup") {
       const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
       if (!createSignalActionGate(actionConfig)("groupManagement")) {
         throw new Error("Signal group management is disabled via actions.groupManagement.");
@@ -321,7 +498,19 @@ const signalMessageActions: ChannelMessageActionAdapter = {
       });
       return jsonResult({ ok: true, left: groupId });
     }
-    if (ctx.action === "member-info") {
+    if (action === "channel-info") {
+      const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
+      if (!createSignalActionGate(actionConfig)("groupManagement")) {
+        throw new Error("Signal group management is disabled via actions.groupManagement.");
+      }
+      const groupId = readSignalGroupIdParam(ctx.params);
+      const group = await getGroupInfoSignal(groupId, {
+        cfg: ctx.cfg,
+        accountId: ctx.accountId ?? undefined,
+      });
+      return jsonResult({ ok: true, groupId, group });
+    }
+    if (action === "member-info") {
       const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
       if (!createSignalActionGate(actionConfig)("groupManagement")) {
         throw new Error("Signal group management is disabled via actions.groupManagement.");
@@ -333,7 +522,7 @@ const signalMessageActions: ChannelMessageActionAdapter = {
       });
       return jsonResult({ ok: true, groupId, members });
     }
-    if (ctx.action === "react") {
+    if (action === "react") {
       const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
       if (!createSignalActionGate(actionConfig)("reactions")) {
         throw new Error("Signal reactions are disabled via actions.reactions.");
@@ -381,21 +570,13 @@ const signalMessageActions: ChannelMessageActionAdapter = {
       });
       return jsonResult({ ok: true, added: emoji, timestamp: result.timestamp });
     }
-    throw new Error(`Action ${ctx.action} not supported for ${SIGNAL_CHANNEL_ID}.`);
+    throw new Error(`Action ${action} not supported for ${SIGNAL_CHANNEL_ID}.`);
   },
 };
-
-const meta = SIGNAL_META;
 
 type SenderScopedToolsEntry = {
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
-};
-
-type SignalSendOptsCompat = SignalSendOpts;
-
-type SignalPayloadChannelData = {
-  mentions?: unknown;
 };
 
 type SignalActionConfig = {
@@ -414,59 +595,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function createSignalActionGate(actions: SignalActionConfig | undefined) {
   return createActionGate<SignalActionConfig>(actions);
-}
-
-function normalizeSignalMentionRecipient(raw: string, index: number): string {
-  const trimmed = stripSignalChannelPrefix(raw);
-  if (!trimmed) {
-    throw new Error(`Signal mention ${index} recipient is required`);
-  }
-  if (trimmed.toLowerCase().startsWith("uuid:")) {
-    const uuid = trimmed.slice("uuid:".length).trim();
-    if (!uuid) {
-      throw new Error(`Signal mention ${index} recipient is required`);
-    }
-    return uuid;
-  }
-  return trimmed;
-}
-
-function parseSignalMentionRanges(rawMentions: unknown): SignalMentionRange[] | undefined {
-  if (!Array.isArray(rawMentions) || rawMentions.length === 0) {
-    return undefined;
-  }
-  return rawMentions.map((rawMention, index) => {
-    if (!isRecord(rawMention)) {
-      throw new Error(`Signal mention ${index} must be an object`);
-    }
-    const start = Number(rawMention.start);
-    if (!Number.isFinite(start) || start < 0) {
-      throw new Error(`Signal mention ${index} has an invalid start`);
-    }
-    const length = Number(rawMention.length);
-    if (!Number.isFinite(length) || length <= 0) {
-      throw new Error(`Signal mention ${index} has an invalid length`);
-    }
-    const recipientRaw = typeof rawMention.recipient === "string" ? rawMention.recipient : "";
-    const recipient = normalizeSignalMentionRecipient(recipientRaw, index);
-    return {
-      start: Math.trunc(start),
-      length: Math.trunc(length),
-      recipient,
-    };
-  });
-}
-
-function resolveSignalPayloadMentions(payload: ReplyPayload): SignalMentionRange[] | undefined {
-  if (!isRecord(payload.channelData)) {
-    return undefined;
-  }
-  const signalData = payload.channelData[SIGNAL_CHANNEL_ID] ?? payload.channelData.signal;
-  if (!isRecord(signalData)) {
-    return undefined;
-  }
-  const typedSignalData = signalData as SignalPayloadChannelData;
-  return parseSignalMentionRanges(typedSignalData.mentions);
 }
 
 function normalizeSignalReactionAuthor(raw: string): string {
@@ -581,6 +709,95 @@ function readSignalGroupIdParam(params: Record<string, unknown>): string {
     throw new Error("Signal group management requires groupId.");
   }
   return stripSignalChannelPrefix(trimmed).replace(/^group:/i, "").trim();
+}
+
+function readSignalParticipantParam(params: Record<string, unknown>, label: string): string {
+  const value =
+    readStringParam(params, "participant") ??
+    readStringParam(params, "member") ??
+    readStringParam(params, "address");
+  if (!value?.trim()) {
+    throw new Error(`Signal ${label} requires participant parameter (phone number or UUID).`);
+  }
+  return value.trim();
+}
+
+function normalizeSignalGroupPermission(raw: string): "everyMember" | "onlyAdmins" {
+  const value = raw.trim().toLowerCase();
+  switch (value) {
+    case "every-member":
+    case "everymember":
+      return "everyMember";
+    case "only-admins":
+    case "onlyadmins":
+      return "onlyAdmins";
+    default:
+      throw new Error('Signal group permission must be "every-member" or "only-admins".');
+  }
+}
+
+function readSignalGroupPermissionParam(params: Record<string, unknown>): "everyMember" | "onlyAdmins" {
+  const raw =
+    readStringParam(params, "permission") ??
+    readStringParam(params, "value") ??
+    readStringParam(params, "mode", {
+      required: true,
+      label: 'permission ("every-member" or "only-admins")',
+    });
+  return normalizeSignalGroupPermission(raw);
+}
+
+function normalizeSignalGroupLinkState(raw: string): "enabled" | "enabledWithApproval" | "disabled" {
+  const value = raw.trim().toLowerCase();
+  switch (value) {
+    case "enabled":
+      return "enabled";
+    case "enabled-with-approval":
+    case "enabledwithapproval":
+      return "enabledWithApproval";
+    case "disabled":
+      return "disabled";
+    default:
+      throw new Error(
+        'Signal group link state must be "enabled", "enabled-with-approval", or "disabled".',
+      );
+  }
+}
+
+function readSignalGroupLinkStateParam(
+  params: Record<string, unknown>,
+): "enabled" | "enabledWithApproval" | "disabled" {
+  const raw =
+    readStringParam(params, "linkState") ??
+    readStringParam(params, "state") ??
+    readStringParam(params, "value", {
+      required: true,
+      label: 'link state ("enabled", "enabled-with-approval", or "disabled")',
+    });
+  return normalizeSignalGroupLinkState(raw);
+}
+
+function readSignalBooleanParam(
+  params: Record<string, unknown>,
+  keys: string[],
+  label: string,
+): boolean {
+  for (const key of keys) {
+    const value = params[key];
+    if (typeof value === "boolean") {
+      return value;
+    }
+    if (typeof value === "string") {
+      const normalized = value.trim().toLowerCase();
+      if (["true", "yes", "on", "1", "enabled"].includes(normalized)) {
+        return true;
+      }
+      if (["false", "no", "off", "0", "disabled"].includes(normalized)) {
+        return false;
+      }
+    }
+  }
+  throw new Error(`Signal ${label} requires a boolean value.`);
 }
 
 function parseSignalMessageTimestamp(raw: string): number {
@@ -720,272 +937,33 @@ function normalizeDirectoryGroupId(raw: string): string {
   return raw.replace(/^group:/i, "").trim();
 }
 
-function buildSignalSetupPatch(input: {
-  signalNumber?: string;
-  cliPath?: string;
-  httpUrl?: string;
-  httpHost?: string;
-  httpPort?: string;
-}) {
-  return {
-    ...(input.signalNumber ? { account: input.signalNumber } : {}),
-    ...(input.cliPath ? { cliPath: input.cliPath } : {}),
-    ...(input.httpUrl ? { httpUrl: input.httpUrl } : {}),
-    ...(input.httpHost ? { httpHost: input.httpHost } : {}),
-    ...(input.httpPort ? { httpPort: Number(input.httpPort) } : {}),
-  };
-}
-
-type SignalSendFn = (
-  to: string,
-  text: string,
-  opts: SignalSendOptsCompat,
-) => Promise<SignalSendResult>;
-
-async function sendSignalOutbound(params: {
-  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
-  to: string;
-  text: string;
-  mediaUrl?: string;
-  mediaLocalRoots?: readonly string[];
-  accountId?: string;
-  silent?: boolean;
-  mentions?: SignalMentionRange[];
-  textMode?: SignalSendOpts["textMode"];
-  textStyles?: SignalTextStyleRange[];
-  replyTo?: string;
-  quoteAuthor?: string;
-  deps?: { sendSignal?: SignalSendFn };
-}) {
-  const send = params.deps?.sendSignal ?? sendMessageSignal;
-  const channelConfig = getSignalConfig(params.cfg);
-  const maxBytes = resolveChannelMediaMaxBytes({
-    cfg: params.cfg,
-    resolveChannelLimitMb: ({ cfg, accountId }) =>
-      channelConfig?.accounts?.[accountId]?.mediaMaxMb ?? channelConfig?.mediaMaxMb,
-    accountId: params.accountId,
-  });
-  const sendOpts: SignalSendOptsCompat = {
-    cfg: params.cfg,
-    ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
-    ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
-    maxBytes,
-    accountId: params.accountId ?? undefined,
-    ...(params.textMode ? { textMode: params.textMode } : {}),
-    ...(params.textStyles?.length ? { textStyles: params.textStyles } : {}),
-    ...(params.replyTo ? { replyTo: params.replyTo } : {}),
-    ...(params.quoteAuthor ? { quoteAuthor: params.quoteAuthor } : {}),
-  };
-  if (params.silent) {
-    sendOpts.silent = true;
-  }
-  if (params.mentions?.length) {
-    sendOpts.mentions = params.mentions;
-  }
-  return await send(params.to, params.text, sendOpts);
-}
-
-async function sendSignalPayloadOutbound(params: {
-  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
-  to: string;
-  payload: ReplyPayload;
-  mediaLocalRoots?: readonly string[];
-  accountId?: string;
-  silent?: boolean;
-  deps?: { sendSignal?: SignalSendFn };
-}) {
-  const text = params.payload.text ?? "";
-  const mediaUrls = params.payload.mediaUrls?.length
-    ? params.payload.mediaUrls
-    : params.payload.mediaUrl
-      ? [params.payload.mediaUrl]
-      : [];
-  const mentions = resolveSignalPayloadMentions(params.payload);
-  const replyToId = params.payload.replyToId?.trim() || undefined;
-
-  if (!text && mediaUrls.length === 0) {
-    return { channel: SIGNAL_CHANNEL_ID, messageId: "" };
-  }
-
-  if (mediaUrls.length > 0) {
-    let lastResult = await sendSignalOutbound({
-      cfg: params.cfg,
-      to: params.to,
-      text,
-      mediaUrl: mediaUrls[0],
-      mediaLocalRoots: params.mediaLocalRoots,
-      accountId: params.accountId,
-      silent: params.silent,
-      mentions,
-      replyTo: replyToId,
-      deps: params.deps,
-    });
-    for (let i = 1; i < mediaUrls.length; i += 1) {
-      lastResult = await sendSignalOutbound({
-        cfg: params.cfg,
-        to: params.to,
-        text: "",
-        mediaUrl: mediaUrls[i],
-        mediaLocalRoots: params.mediaLocalRoots,
-        accountId: params.accountId,
-        silent: params.silent,
-        deps: params.deps,
-      });
+const signalOutbound = {
+  ...signalOutboundBase,
+  sendPoll: async (ctx: { cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"]; to: string; poll: { question: string; options: string[]; maxSelections?: number | null }; accountId?: string | null }) => {
+    const { cfg, to, poll, accountId } = ctx;
+    const actionConfig = resolveSignalAccount({ cfg, accountId }).config.actions;
+    if (!createSignalActionGate(actionConfig)("poll")) {
+      throw new Error("Signal poll creation is disabled via actions.poll.");
     }
-    return { channel: SIGNAL_CHANNEL_ID, ...lastResult };
-  }
-
-  const chunkLimit = 4000;
-  if (mentions?.length) {
-    // Mention offsets are authored against the final payload text, so keep the
-    // message intact instead of re-chunking and invalidating native ranges.
-    const result = await sendSignalOutbound({
-      cfg: params.cfg,
-      to: params.to,
-      text,
-      accountId: params.accountId,
-      silent: params.silent,
-      mentions,
-      replyTo: replyToId,
-      deps: params.deps,
+    const result = await sendPollCreateSignal(to, {
+      cfg,
+      accountId: accountId ?? undefined,
+      question: poll.question,
+      options: poll.options,
+      allowMultiple: (poll.maxSelections ?? 1) > 1,
     });
-    return { channel: SIGNAL_CHANNEL_ID, ...result };
-  }
-  const tableMode = resolveSignalMarkdownTableMode({
-    cfg: params.cfg,
-    accountId: params.accountId ?? undefined,
-  });
-  const chunks = markdownToSignalTextChunks(text, chunkLimit, { tableMode });
-  let lastResult = { messageId: "" };
-  let firstChunk = true;
-  for (const chunk of chunks) {
-    lastResult = await sendSignalOutbound({
-      cfg: params.cfg,
-      to: params.to,
-      text: chunk.text,
-      textMode: "plain",
-      textStyles: chunk.styles,
-      accountId: params.accountId,
-      silent: params.silent,
-      replyTo: firstChunk ? replyToId : undefined,
-      deps: params.deps,
-    });
-    firstChunk = false;
-  }
-  return { channel: SIGNAL_CHANNEL_ID, ...lastResult };
-}
+    return { messageId: result.messageId };
+  },
+};
 
-export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
-  id: SIGNAL_CHANNEL_ID,
-  meta: {
-    ...meta,
-  },
-  pairing: {
-    idLabel: "signalNumber",
-    normalizeAllowEntry: (entry) => stripSignalChannelPrefix(entry),
-    notifyApproval: async ({ cfg, id }) => {
-      await sendMessageSignal(id, PAIRING_APPROVED_MESSAGE, { cfg });
+export const signalPlugin = createChatChannelPlugin<ResolvedSignalAccount, SignalProbe>({
+  base: {
+    ...createSignalCustomPluginBase(),
+    actions: signalMessageActions,
+    mentions: {
+      stripPatterns: () => ["\uFFFC"],
     },
-  },
-  capabilities: {
-    chatTypes: ["direct", "group"],
-    polls: true,
-    media: true,
-    reactions: true,
-    edit: true,
-    unsend: true,
-    groupManagement: true,
-    blockStreaming: true,
-  },
-  actions: signalMessageActions,
-  streaming: {
-    blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
-  },
-  mentions: {
-    stripPatterns: () => ["\uFFFC"],
-  },
-  reload: { configPrefixes: [`channels.${SIGNAL_CHANNEL_ID}`] },
-  configSchema: buildChannelConfigSchema(SignalConfigSchema),
-  config: {
-    listAccountIds: (cfg) => listSignalAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveSignalAccount({ cfg, accountId }),
-    defaultAccountId: (cfg) => resolveDefaultSignalAccountId(cfg),
-    setAccountEnabled: ({ cfg, accountId, enabled }) =>
-      setAccountEnabledInConfigSection({
-        cfg,
-        sectionKey: SIGNAL_CHANNEL_ID,
-        accountId,
-        enabled,
-        allowTopLevel: true,
-      }),
-    deleteAccount: ({ cfg, accountId }) =>
-      deleteAccountFromConfigSection({
-        cfg,
-        sectionKey: SIGNAL_CHANNEL_ID,
-        accountId,
-        clearBaseFields: [
-          "account",
-          "httpUrl",
-          "httpHost",
-          "httpPort",
-          "cliPath",
-          "configPath",
-          "name",
-        ],
-      }),
-    isConfigured: (account) => account.configured,
-    describeAccount: (account) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
-      baseUrl: account.baseUrl,
-    }),
-    resolveAllowFrom: ({ cfg, accountId }) =>
-      (resolveSignalAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
-        String(entry),
-      ),
-    formatAllowFrom: ({ allowFrom }) =>
-      allowFrom
-        .map((entry) => String(entry).trim())
-        .filter(Boolean)
-        .map((entry) => (entry === "*" ? "*" : normalizeE164(stripSignalChannelPrefix(entry))))
-        .filter(Boolean),
-    resolveDefaultTo: ({ cfg, accountId }) =>
-      resolveSignalAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
-  },
-  security: {
-    resolveDmPolicy: ({ cfg, accountId, account }) => {
-      const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccountPath = Boolean(getSignalConfig(cfg)?.accounts?.[resolvedAccountId]);
-      const basePath = useAccountPath
-        ? `channels.${SIGNAL_CHANNEL_ID}.accounts.${resolvedAccountId}.`
-        : `channels.${SIGNAL_CHANNEL_ID}.`;
-      return {
-        policy: account.config.dmPolicy ?? "pairing",
-        allowFrom: account.config.allowFrom ?? [],
-        policyPath: `${basePath}dmPolicy`,
-        allowFromPath: basePath,
-        approveHint: formatPairingApproveHint(SIGNAL_CHANNEL_ID),
-        normalizeEntry: (raw) => normalizeE164(stripSignalChannelPrefix(raw)),
-      };
-    },
-    collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
-      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
-        providerConfigPresent: getSignalConfig(cfg) !== undefined,
-        groupPolicy: account.config.groupPolicy,
-        defaultGroupPolicy,
-      });
-      if (groupPolicy !== "open") {
-        return [];
-      }
-      return [
-        `- Signal groups: groupPolicy="open" allows any member to trigger the bot. Set channels.${SIGNAL_CHANNEL_ID}.groupPolicy="allowlist" + channels.${SIGNAL_CHANNEL_ID}.groupAllowFrom to restrict senders.`,
-      ];
-    },
-  },
-  groups: {
+    groups: {
     resolveRequireMention: (params) =>
       getSignalRuntime().channel.groups.resolveRequireMention({
         cfg: params.cfg,
@@ -1006,256 +984,102 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       }
       return resolveSenderScopedToolPolicy(policy.defaultConfig, params);
     },
-  },
-  messaging: {
-    normalizeTarget: normalizeSignalCustomMessagingTarget,
-    targetResolver: {
-      looksLikeId: looksLikeSignalCustomTargetId,
-      hint: "<E.164|uuid:ID|group:ID|signal-custom:group:ID|signal-custom:+E.164>",
     },
-  },
-  directory: {
-    listPeers: async ({ cfg, accountId, query, limit }) => {
-      const contacts = await listSignalContacts({
-        cfg,
-        accountId: accountId ?? undefined,
-      });
-      const entries = contacts
-        .map((contact) => {
-          const number = typeof contact.number === "string" ? normalizeE164(contact.number) : "";
-          const uuid = typeof contact.uuid === "string" ? contact.uuid.trim() : "";
-          const id = number || (uuid ? `uuid:${uuid}` : "");
-          if (!id) {
-            return null;
-          }
-          const name = typeof contact.name === "string" ? contact.name.trim() : "";
-          return {
-            kind: "user" as const,
-            id,
-            ...(name ? { name } : {}),
-            raw: contact,
-          };
-        })
-        .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
-      return applyDirectoryQueryAndLimit(entries, query, limit);
+    messaging: {
+      normalizeTarget: normalizeSignalCustomMessagingTarget,
+      parseExplicitTarget: ({ raw }) => parseSignalCustomExplicitTarget(raw),
+      inferTargetChatType: ({ to }) => inferSignalCustomTargetChatType(to),
+      resolveOutboundSessionRoute: (params) => resolveSignalCustomOutboundSessionRoute(params),
+      targetResolver: {
+        looksLikeId: looksLikeSignalCustomTargetId,
+        hint: "<E.164|uuid:ID|group:ID|signal-custom:group:ID|signal-custom:+E.164>",
+      },
     },
-    listGroups: async ({ cfg, accountId, query, limit }) => {
-      const groups = await listSignalGroups(
-        {
+    directory: {
+      listPeers: async ({ cfg, accountId, query, limit }) => {
+        const contacts = await listSignalContacts({
           cfg,
           accountId: accountId ?? undefined,
-        },
-        { detailed: false },
-      );
-      const entries = groups
-        .map((group) => {
-          const groupId = typeof group.id === "string" ? group.id.trim() : "";
-          if (!groupId) {
-            return null;
-          }
-          const name = typeof group.name === "string" ? group.name.trim() : "";
-          return {
-            kind: "group" as const,
-            id: `group:${groupId}`,
-            ...(name ? { name } : {}),
-            raw: group,
-          };
-        })
-        .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
-      return applyDirectoryQueryAndLimit(entries, query, limit);
-    },
-    listGroupMembers: async ({ cfg, accountId, groupId, limit }) => {
-      const members = await listGroupMembersSignal(normalizeDirectoryGroupId(groupId), {
-        cfg,
-        accountId: accountId ?? undefined,
-      });
-      const entries = members
-        .map((member) => {
-          const number = typeof member.number === "string" ? normalizeE164(member.number) : "";
-          const uuid = typeof member.uuid === "string" ? member.uuid.trim() : "";
-          const id = number || (uuid ? `uuid:${uuid}` : "");
-          if (!id) {
-            return null;
-          }
-          const name = typeof member.name === "string" ? member.name.trim() : "";
-          return {
-            kind: "user" as const,
-            id,
-            ...(name ? { name } : {}),
-            raw: member,
-          };
-        })
-        .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
-      return applyDirectoryQueryAndLimit(entries, undefined, limit);
-    },
-  },
-  setup: {
-    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-    applyAccountName: ({ cfg, accountId, name }) =>
-      applyAccountNameToChannelSection({
-        cfg,
-        channelKey: SIGNAL_CHANNEL_ID,
-        accountId,
-        name,
-      }),
-    validateInput: ({ input }) => {
-      if (
-        !input.signalNumber &&
-        !input.httpUrl &&
-        !input.httpHost &&
-        !input.httpPort &&
-        !input.cliPath
-      ) {
-        return "Signal requires --signal-number or --http-url/--http-host/--http-port/--cli-path.";
-      }
-      return null;
-    },
-    applyAccountConfig: ({ cfg, accountId, input }) => {
-      const namedConfig = applyAccountNameToChannelSection({
-        cfg,
-        channelKey: SIGNAL_CHANNEL_ID,
-        accountId,
-        name: input.name,
-      });
-      const next =
-        accountId !== DEFAULT_ACCOUNT_ID
-          ? migrateBaseNameToDefaultAccount({
-              cfg: namedConfig,
-              channelKey: SIGNAL_CHANNEL_ID,
-            })
-          : namedConfig;
-      if (accountId === DEFAULT_ACCOUNT_ID) {
-        return {
-          ...next,
-          channels: {
-            ...next.channels,
-            [SIGNAL_CHANNEL_ID]: {
-              ...next.channels?.[SIGNAL_CHANNEL_ID],
-              enabled: true,
-              ...buildSignalSetupPatch(input),
-            },
+        });
+        const entries = contacts
+          .map((contact) => {
+            const number = typeof contact.number === "string" ? normalizeE164(contact.number) : "";
+            const uuid = typeof contact.uuid === "string" ? contact.uuid.trim() : "";
+            const id = number || (uuid ? `uuid:${uuid}` : "");
+            if (!id) {
+              return null;
+            }
+            const name = typeof contact.name === "string" ? contact.name.trim() : "";
+            return {
+              kind: "user" as const,
+              id,
+              ...(name ? { name } : {}),
+              raw: contact,
+            };
+          })
+          .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+        return applyDirectoryQueryAndLimit(entries, query, limit);
+      },
+      listGroups: async ({ cfg, accountId, query, limit }) => {
+        const groups = await listSignalGroups(
+          {
+            cfg,
+            accountId: accountId ?? undefined,
           },
-        };
-      }
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          [SIGNAL_CHANNEL_ID]: {
-            ...next.channels?.[SIGNAL_CHANNEL_ID],
-            enabled: true,
-            accounts: {
-              ...getSignalConfig(next)?.accounts,
-              [accountId]: {
-                ...getSignalConfig(next)?.accounts?.[accountId],
-                enabled: true,
-                ...buildSignalSetupPatch(input),
-              },
-            },
-          },
-        },
-      };
+          { detailed: false },
+        );
+        const entries = groups
+          .map((group) => {
+            const groupId = typeof group.id === "string" ? group.id.trim() : "";
+            if (!groupId) {
+              return null;
+            }
+            const name = typeof group.name === "string" ? group.name.trim() : "";
+            return {
+              kind: "group" as const,
+              id: `group:${groupId}`,
+              ...(name ? { name } : {}),
+              raw: group,
+            };
+          })
+          .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+        return applyDirectoryQueryAndLimit(entries, query, limit);
+      },
+      listGroupMembers: async ({ cfg, accountId, groupId, limit }) => {
+        const members = await listGroupMembersSignal(normalizeDirectoryGroupId(groupId), {
+          cfg,
+          accountId: accountId ?? undefined,
+        });
+        const entries = members
+          .map((member) => {
+            const number = typeof member.number === "string" ? normalizeE164(member.number) : "";
+            const uuid = typeof member.uuid === "string" ? member.uuid.trim() : "";
+            const id = number || (uuid ? `uuid:${uuid}` : "");
+            if (!id) {
+              return null;
+            }
+            const name = typeof member.name === "string" ? member.name.trim() : "";
+            return {
+              kind: "user" as const,
+              id,
+              ...(name ? { name } : {}),
+              raw: member,
+            };
+          })
+          .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+        return applyDirectoryQueryAndLimit(entries, undefined, limit);
+      },
     },
   },
-  outbound: {
-    deliveryMode: "direct",
-    chunker: (text, limit) => chunkTextForOutbound(text, limit),
-    chunkerMode: "text",
-    textChunkLimit: 4000,
-    sendPayload: async ({ cfg, to, payload, mediaLocalRoots, accountId, deps, silent }) => {
-      return await sendSignalPayloadOutbound({
-        cfg,
-        to,
-        payload,
-        mediaLocalRoots,
-        accountId: accountId ?? undefined,
-        deps: deps as { sendSignal?: SignalSendFn } | undefined,
-        silent: silent ?? undefined,
-      });
-    },
-    sendText: async ({ cfg, to, text, accountId, deps, silent, replyToId }) => {
-      const result = await sendSignalOutbound({
-        cfg,
-        to,
-        text,
-        accountId: accountId ?? undefined,
-        silent: silent ?? undefined,
-        replyTo: replyToId ?? undefined,
-        deps: deps as { sendSignal?: SignalSendFn } | undefined,
-      });
-      return { channel: SIGNAL_CHANNEL_ID, ...result };
-    },
-    sendMedia: async ({
-      cfg,
-      to,
-      text,
-      mediaUrl,
-      mediaLocalRoots,
-      accountId,
-      deps,
-      silent,
-      replyToId,
-    }) => {
-      const result = await sendSignalOutbound({
-        cfg,
-        to,
-        text,
-        mediaUrl,
-        mediaLocalRoots,
-        accountId: accountId ?? undefined,
-        silent: silent ?? undefined,
-        replyTo: replyToId ?? undefined,
-        deps: deps as { sendSignal?: SignalSendFn } | undefined,
-      });
-      return { channel: SIGNAL_CHANNEL_ID, ...result };
-    },
-    sendPoll: async ({ cfg, to, poll, accountId }) => {
-      const actionConfig = resolveSignalAccount({ cfg, accountId }).config.actions;
-      if (!createSignalActionGate(actionConfig)("poll")) {
-        throw new Error("Signal poll creation is disabled via actions.poll.");
-      }
-      const result = await sendPollCreateSignal(to, {
-        cfg,
-        accountId: accountId ?? undefined,
-        question: poll.question,
-        options: poll.options,
-        allowMultiple: (poll.maxSelections ?? 1) > 1,
-      });
-      return { messageId: result.messageId };
+  pairing: {
+    text: {
+      idLabel: "signalNumber",
+      message: PAIRING_APPROVED_MESSAGE,
+      normalizeAllowEntry: (entry) => stripSignalChannelPrefix(entry),
+      notify: async ({ cfg, id, message }) => {
+        await sendMessageSignal(id, message, { cfg });
+      },
     },
   },
-  status: {
-    defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
-    collectStatusIssues: (accounts) => collectStatusIssuesFromLastError(SIGNAL_CHANNEL_ID, accounts),
-    buildChannelSummary: ({ snapshot }) => ({
-      ...buildBaseChannelStatusSummary(snapshot),
-      baseUrl: snapshot.baseUrl ?? null,
-      probe: snapshot.probe,
-      lastProbeAt: snapshot.lastProbeAt ?? null,
-    }),
-    probeAccount: async ({ account, timeoutMs }) => {
-      return await probeSignal(account.baseUrl, timeoutMs);
-    },
-    buildAccountSnapshot: ({ account, runtime, probe }) => ({
-      ...buildBaseAccountStatusSnapshot({ account, runtime, probe }),
-      baseUrl: account.baseUrl,
-    }),
-  },
-  gateway: {
-    startAccount: async (ctx) => {
-      const account = ctx.account;
-      ctx.setStatus({
-        accountId: account.accountId,
-        baseUrl: account.baseUrl,
-      });
-      ctx.log?.info(`[${account.accountId}] starting provider (${account.baseUrl})`);
-      return monitorSignalProvider({
-        accountId: account.accountId,
-        config: ctx.cfg,
-        runtime: ctx.runtime,
-        abortSignal: ctx.abortSignal,
-        mediaMaxMb: account.config.mediaMaxMb,
-      });
-    },
-  },
-};
+  outbound: signalOutbound,
+});

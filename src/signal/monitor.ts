@@ -448,9 +448,12 @@ async function deliverReplies(params: {
   textLimit: number;
   chunkMode: "length" | "newline";
   quoteAuthor?: string;
+  storyTimestamp?: number;
+  storyAuthor?: string;
 }) {
   const { cfg, replies, target, accountId, runtime, maxBytes, textLimit, chunkMode } = params;
   const consumedReplyIds = new Set<string>();
+  let storyReplyUsed = false;
   for (const payload of replies) {
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const text = payload.text ?? "";
@@ -459,6 +462,12 @@ async function deliverReplies(params: {
     }
     const replyToId = payload.replyToId?.trim() || undefined;
     const includeQuote = replyToId !== undefined && !consumedReplyIds.has(replyToId);
+    const includeStory =
+      !storyReplyUsed &&
+      typeof params.storyTimestamp === "number" &&
+      Number.isFinite(params.storyTimestamp) &&
+      params.storyTimestamp > 0 &&
+      Boolean(params.storyAuthor?.trim());
     if (mediaList.length === 0) {
       let first = true;
       for (const chunk of getSignalRuntime().channel.text.chunkTextWithMode(
@@ -472,9 +481,14 @@ async function deliverReplies(params: {
           maxBytes,
           replyTo: first && includeQuote ? replyToId : undefined,
           quoteAuthor: first && includeQuote ? params.quoteAuthor : undefined,
+          storyTimestamp: first && includeStory ? params.storyTimestamp : undefined,
+          storyAuthor: first && includeStory ? params.storyAuthor : undefined,
         });
         if (first && includeQuote && replyToId) {
           consumedReplyIds.add(replyToId);
+        }
+        if (first && includeStory) {
+          storyReplyUsed = true;
         }
         first = false;
       }
@@ -489,9 +503,14 @@ async function deliverReplies(params: {
           accountId,
           replyTo: first && includeQuote ? replyToId : undefined,
           quoteAuthor: first && includeQuote ? params.quoteAuthor : undefined,
+          storyTimestamp: first && includeStory ? params.storyTimestamp : undefined,
+          storyAuthor: first && includeStory ? params.storyAuthor : undefined,
         });
         if (first && includeQuote && replyToId) {
           consumedReplyIds.add(replyToId);
+        }
+        if (first && includeStory) {
+          storyReplyUsed = true;
         }
         first = false;
       }
@@ -807,6 +826,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       reactionAllowlist,
       mediaMaxBytes,
       ignoreAttachments,
+      ignoreStories: opts.ignoreStories ?? accountInfo.config.ignoreStories,
       sendReadReceipts,
       readReceiptsViaDaemon,
       injectLinkPreviews: accountInfo.config.injectLinkPreviews,

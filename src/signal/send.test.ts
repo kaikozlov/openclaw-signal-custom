@@ -188,6 +188,164 @@ describe("sendMessageSignal", () => {
     }
   });
 
+  it("threads view-once for image attachments", async () => {
+    const mediaDir = await mkdtemp(path.join(tmpdir(), "signal-send-view-once-"));
+    const mediaPath = path.join(mediaDir, "photo.png");
+    await writeFile(
+      mediaPath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a0QAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    const saveMediaBuffer = vi.fn(async () => ({
+      path: "/tmp/openclaw-signal-custom-media/photo.png",
+    }));
+    setSignalRuntime({
+      channel: {
+        media: {
+          saveMediaBuffer,
+        },
+        text: {
+          resolveMarkdownTableMode: () => "off",
+        },
+      },
+    } as never);
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        text: JSON.stringify({
+          jsonrpc: "2.0",
+          result: { timestamp: 1700000003001 },
+        }),
+      }),
+    );
+
+    try {
+      await sendMessageSignal("+15550007778", "", {
+        cfg: {
+          channels: {
+            "signal-custom": {
+              account: "+15559990000",
+              httpUrl: "http://signal.local",
+            },
+          },
+        } as never,
+        mediaUrl: pathToFileURL(mediaPath).href,
+        mediaLocalRoots: [mediaDir],
+        viewOnce: true,
+      });
+
+      const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+        params: Record<string, unknown>;
+      };
+      expect(body.params).toEqual(
+        expect.objectContaining({
+          account: "+15559990000",
+          attachments: ["/tmp/openclaw-signal-custom-media/photo.png"],
+          recipient: ["+15550007778"],
+          "view-once": true,
+        }),
+      );
+      expect(body.params.message).toBe("<media:image>");
+    } finally {
+      await rm(mediaDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects view-once without image or video attachments", async () => {
+    await expect(
+      sendMessageSignal("+15550007779", "hello", {
+        cfg: {
+          channels: {
+            "signal-custom": {
+              account: "+15559990000",
+              httpUrl: "http://signal.local",
+            },
+          },
+        } as never,
+        viewOnce: true,
+      }),
+    ).rejects.toThrow(/requires an image or video attachment/i);
+
+    const mediaDir = await mkdtemp(path.join(tmpdir(), "signal-send-view-once-document-"));
+    const mediaPath = path.join(mediaDir, "note.txt");
+    await writeFile(mediaPath, "text");
+    setSignalRuntime({
+      channel: {
+        media: {
+          saveMediaBuffer: async () => ({
+            path: "/tmp/openclaw-signal-custom-media/note.txt",
+          }),
+        },
+        text: {
+          resolveMarkdownTableMode: () => "off",
+        },
+      },
+    } as never);
+    try {
+      await expect(
+        sendMessageSignal("+15550007780", "", {
+          cfg: {
+            channels: {
+              "signal-custom": {
+                account: "+15559990000",
+                httpUrl: "http://signal.local",
+              },
+            },
+          } as never,
+          mediaUrl: pathToFileURL(mediaPath).href,
+          mediaLocalRoots: [mediaDir],
+          viewOnce: true,
+        }),
+      ).rejects.toThrow(/only supported for image and video attachments/i);
+    } finally {
+      await rm(mediaDir, { recursive: true, force: true });
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("threads story reply parameters when provided", async () => {
+    setSignalRuntime({
+      channel: {
+        text: {
+          resolveMarkdownTableMode: () => "off",
+        },
+      },
+    } as never);
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        text: JSON.stringify({
+          jsonrpc: "2.0",
+          result: { timestamp: 1700000003002 },
+        }),
+      }),
+    );
+
+    await sendMessageSignal("+15550007781", "story reply", {
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15559990000",
+            httpUrl: "http://signal.local",
+          },
+        },
+      } as never,
+      storyTimestamp: 1700000001111,
+      storyAuthor: "uuid:123e4567-e89b-12d3-a456-426614174000",
+    });
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      params: Record<string, unknown>;
+    };
+    expect(body.params).toEqual(
+      expect.objectContaining({
+        recipient: ["+15550007781"],
+        "story-timestamp": 1700000001111,
+        "story-author": "uuid:123e4567-e89b-12d3-a456-426614174000",
+      }),
+    );
+  });
+
   it("parses numeric quote timestamps and rejects invalid values", () => {
     expect(parseQuoteTimestamp("1771479242643")).toBe(1771479242643);
     expect(parseQuoteTimestamp("")).toBeUndefined();

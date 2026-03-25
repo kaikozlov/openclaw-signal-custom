@@ -16,6 +16,7 @@ export type SignalEnvelope = {
   sourceName?: string | null;
   timestamp?: number | null;
   dataMessage?: SignalDataMessage | null;
+  storyMessage?: SignalStoryMessage | null;
   editMessage?: {
     targetSentTimestamp?: number | string | null;
     dataMessage?: SignalDataMessage | null;
@@ -35,6 +36,7 @@ export type SignalMention = {
 export type SignalDataMessage = {
   timestamp?: number | string | null;
   message?: string | null;
+  viewOnce?: boolean | null;
   attachments?: Array<SignalAttachment>;
   sticker?: SignalSticker | null;
   previews?: Array<SignalLinkPreview> | null;
@@ -47,6 +49,11 @@ export type SignalDataMessage = {
   groupInfo?: {
     groupId?: string | null;
     groupName?: string | null;
+  } | null;
+  storyContext?: {
+    authorNumber?: string | null;
+    authorUuid?: string | null;
+    sentTimestamp?: number | string | null;
   } | null;
   quote?: {
     id?: number | string | null;
@@ -66,6 +73,17 @@ export type SignalDataMessage = {
   } | null;
   pinMessage?: (SignalTargetMessageRef & { pinDurationSeconds?: number | null }) | null;
   unpinMessage?: SignalTargetMessageRef | null;
+};
+
+export type SignalStoryMessage = {
+  allowsReplies?: boolean | null;
+  groupId?: string | null;
+  fileAttachment?: SignalAttachment | null;
+  textAttachment?: {
+    text?: string | null;
+    style?: string | null;
+    preview?: SignalLinkPreview | null;
+  } | null;
 };
 
 export type SignalTargetAuthorObject = {
@@ -182,6 +200,7 @@ export type SignalEventHandlerDeps = {
   reactionAllowlist: string[];
   mediaMaxBytes: number;
   ignoreAttachments: boolean;
+  ignoreStories?: boolean;
   sendReadReceipts: boolean;
   readReceiptsViaDaemon: boolean;
   injectLinkPreviews?: boolean;
@@ -204,6 +223,8 @@ export type SignalEventHandlerDeps = {
     maxBytes: number;
     textLimit: number;
     quoteAuthor?: string;
+    storyTimestamp?: number;
+    storyAuthor?: string;
   }) => Promise<void>;
   resolveSignalReactionTargets: (reaction: SignalReactionMessage) => SignalReactionTarget[];
   isSignalReactionMessage: (

@@ -2,14 +2,17 @@ import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   createChannelReplyPipeline,
+  createStatusReactionController,
   DM_GROUP_ACCESS_REASON,
   formatInboundFromLabel,
   logInboundDrop,
   logTypingFailure,
   normalizeE164,
   recordPendingHistoryEntryIfEnabled,
+  resolveAckReaction,
   resolveControlCommandGate,
   resolveMentionGatingWithBypass,
+  shouldAckReaction,
 } from "../../runtime-api.js";
 import { SIGNAL_CHANNEL_ID } from "../../constants.js";
 import { getSignalRuntime } from "../../runtime.js";
@@ -29,8 +32,8 @@ import {
 import { resolveSignalAccount } from "../../config.js";
 import { recordSignalReactionTarget } from "../reaction-target-cache.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
+import { removeReactionSignal, sendReactionSignal } from "../send-reactions.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
-import { maybeSendSignalAckReaction } from "./ack-reaction.js";
 import type {
   SignalDataMessage,
   SignalEnvelope,
@@ -38,6 +41,7 @@ import type {
   SignalMention,
   SignalReactionMessage,
   SignalReceivePayload,
+  SignalStoryMessage,
   SignalTextStyleRange,
 } from "./event-handler.types.js";
 import { renderSignalMentions } from "./mentions.js";
@@ -352,6 +356,52 @@ function buildSignalAttachmentDetailContext(params: {
   return context;
 }
 
+function normalizeStoryTimestamp(value: number | string | null | undefined): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.trunc(value);
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : undefined;
+}
+
+function normalizeSignalStoryAuthor(raw: string | null | undefined): string | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  return trimmed || undefined;
+}
+
+function buildSignalStoryContext(params: {
+  author?: string;
+  timestamp?: number;
+  allowsReplies?: boolean;
+}): string[] {
+  const context: string[] = [];
+  if (typeof params.allowsReplies === "boolean") {
+    context.push(`Signal story replies: ${params.allowsReplies ? "enabled" : "disabled"}`);
+  }
+  if (params.author || params.timestamp) {
+    const details = [
+      params.author ? `author ${params.author}` : undefined,
+      typeof params.timestamp === "number" ? `timestamp ${params.timestamp}` : undefined,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    if (details) {
+      context.push(`Signal story context: ${details}`);
+    }
+  }
+  return context;
+}
+
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   type SignalInboundEntry = {
     senderName: string;
@@ -379,10 +429,17 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     untrustedContext?: string[];
     commandAuthorized: boolean;
     wasMentioned?: boolean;
+    shouldAckReaction?: boolean;
+    ackTargetTimestamp?: number;
+    statusReactionTargetAuthor?: string;
+    statusReactionTargetAuthorUuid?: string;
     replyToId?: string;
     replyToBody?: string;
     replyToSender?: string;
     replyToIsQuote?: boolean;
+    replyToIsStory?: boolean;
+    storyReplyTimestamp?: number;
+    storyReplyAuthor?: string;
   };
 
   const pluginRuntime = getSignalRuntime();
@@ -527,6 +584,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       ReplyToBody: entry.replyToBody,
       ReplyToSender: entry.replyToSender,
       ReplyToIsQuote: entry.replyToIsQuote === true ? true : undefined,
+      ReplyToIsStory: entry.replyToIsStory === true ? true : undefined,
+      StoryReplyTimestamp: entry.storyReplyTimestamp,
+      StoryReplyAuthor: entry.storyReplyAuthor,
     });
 
     await pluginRuntime.channel.session.recordInboundSession({
@@ -570,6 +630,72 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       logVerbose(
         `signal inbound: from=${ctxPayload.From} len=${body.length} preview="${preview}"`,
       );
+    }
+
+    const reactionLevel =
+      resolveSignalAccount({
+        cfg: deps.cfg,
+        accountId: deps.accountId,
+      }).config.reactionLevel ?? "minimal";
+    const ackEmoji = resolveAckReaction(deps.cfg, route.agentId, {
+      channel: SIGNAL_CHANNEL_ID,
+      accountId: deps.accountId,
+    }).trim();
+    const statusReactionsConfig = deps.cfg.messages?.statusReactions;
+    const ackReactionsEnabled = reactionLevel === "ack";
+    const agentReactionsEnabled = reactionLevel === "minimal" || reactionLevel === "extensive";
+    const statusReactionController =
+      entry.shouldAckReaction &&
+      typeof entry.ackTargetTimestamp === "number" &&
+      Boolean(ackEmoji) &&
+      statusReactionsConfig?.enabled === true &&
+      agentReactionsEnabled
+        ? createStatusReactionController({
+            enabled: true,
+            adapter: {
+              setReaction: async (emoji: string) => {
+                await sendReactionSignal(entry.senderRecipient, entry.ackTargetTimestamp!, emoji, {
+                  cfg: deps.cfg,
+                  accountId: deps.accountId,
+                  groupId: entry.groupId,
+                  targetAuthor: entry.statusReactionTargetAuthor,
+                  targetAuthorUuid: entry.statusReactionTargetAuthorUuid,
+                });
+              },
+              removeReaction: async (emoji: string) => {
+                await removeReactionSignal(entry.senderRecipient, entry.ackTargetTimestamp!, emoji, {
+                  cfg: deps.cfg,
+                  accountId: deps.accountId,
+                  groupId: entry.groupId,
+                  targetAuthor: entry.statusReactionTargetAuthor,
+                  targetAuthorUuid: entry.statusReactionTargetAuthorUuid,
+                });
+              },
+            },
+            initialEmoji: ackEmoji,
+            emojis: statusReactionsConfig.emojis,
+            timing: statusReactionsConfig.timing,
+            onError: (err) => {
+              logVerbose(`Signal status reaction failed: ${String(err)}`);
+            },
+          })
+        : null;
+    if (entry.shouldAckReaction && typeof entry.ackTargetTimestamp === "number") {
+      if (statusReactionController) {
+        void Promise.resolve(statusReactionController.setQueued()).catch((err) => {
+          logVerbose(`Signal status reaction failed: ${String(err)}`);
+        });
+      } else if (ackReactionsEnabled) {
+        void sendReactionSignal(entry.senderRecipient, entry.ackTargetTimestamp, ackEmoji, {
+          cfg: deps.cfg,
+          accountId: deps.accountId,
+          groupId: entry.groupId,
+          targetAuthor: entry.statusReactionTargetAuthor,
+          targetAuthorUuid: entry.statusReactionTargetAuthorUuid,
+        }).catch((err) => {
+          logVerbose(`Signal ack reaction failed: ${String(err)}`);
+        });
+      }
     }
 
     const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
@@ -635,6 +761,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
               maxBytes: deps.mediaMaxBytes,
               textLimit: deps.textLimit,
               quoteAuthor: entry.senderRecipient || undefined,
+              storyTimestamp: entry.storyReplyTimestamp,
+              storyAuthor: entry.storyReplyAuthor,
             });
           },
           onError: (err, info) => {
@@ -645,8 +773,41 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           disableBlockStreaming:
             typeof deps.blockStreaming === "boolean" ? !deps.blockStreaming : undefined,
           onModelSelected,
+          onPartialReply: statusReactionController
+            ? async () => {
+                await Promise.resolve(statusReactionController.setThinking());
+              }
+            : undefined,
+          onToolStart: statusReactionController
+            ? async ({ name }: { name?: string }) => {
+                await Promise.resolve(statusReactionController.setTool(name));
+              }
+            : undefined,
+          onCompactionStart: statusReactionController
+            ? async () => {
+                await Promise.resolve(statusReactionController.setCompacting());
+              }
+            : undefined,
+          onCompactionEnd: statusReactionController
+            ? async () => {
+                statusReactionController.cancelPending();
+                await Promise.resolve(statusReactionController.setThinking());
+              }
+            : undefined,
         },
       });
+
+    if (statusReactionController) {
+      if (!queuedFinal) {
+        void statusReactionController.setError().catch((err) => {
+          logVerbose(`Signal status reaction failed: ${String(err)}`);
+        });
+      } else {
+        void statusReactionController.setDone().catch((err) => {
+          logVerbose(`Signal status reaction failed: ${String(err)}`);
+        });
+      }
+    }
 
     if (!queuedFinal) {
       if (entry.isGroup && historyKey) {
@@ -1123,6 +1284,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       const value = raw.trim();
       return value || undefined;
     })();
+    const storyContextAuthor =
+      normalizeSignalStoryAuthor(dataMessage?.storyContext?.authorUuid) ??
+      normalizeSignalStoryAuthor(dataMessage?.storyContext?.authorNumber);
+    const storyContextTimestamp = normalizeStoryTimestamp(dataMessage?.storyContext?.sentTimestamp);
     const sticker = dataMessage?.sticker;
     const stickerPackId = sticker?.packId != null ? String(sticker.packId).trim() || undefined : undefined;
     const stickerId = sticker?.stickerId != null ? String(sticker.stickerId).trim() || undefined : undefined;
@@ -1132,6 +1297,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     ].filter((entry): entry is string => Boolean(entry));
     const linkPreviewContext =
       deps.injectLinkPreviews !== false ? buildSignalLinkPreviewContext(dataMessage?.previews) : [];
+    const storyContextLines = buildSignalStoryContext({
+      author: storyContextAuthor,
+      timestamp: storyContextTimestamp,
+    });
     const contactContext = buildSignalContactContext(dataMessage?.contacts);
     const pollCreate = dataMessage?.pollCreate ?? null;
     const pollVote = dataMessage?.pollVote ?? null;
@@ -1235,6 +1404,83 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         resolveAccessDecision,
       })
     ) {
+      return;
+    }
+    const storyMessage = envelope.storyMessage;
+    if (storyMessage) {
+      if (deps.ignoreStories) {
+        logVerbose("signal: skipping story message (ignoreStories=true)");
+        return;
+      }
+      const senderRecipient = resolveSignalRecipient(sender);
+      const senderPeerId = resolveSignalPeerId(sender);
+      if (!senderRecipient) {
+        return;
+      }
+      const senderDisplay = formatSignalSenderDisplay(sender);
+      const senderName = envelope.sourceName ?? senderDisplay;
+      const groupId = storyMessage.groupId?.trim() || undefined;
+      const isGroup = Boolean(groupId);
+      const mediaAttachment = storyMessage.fileAttachment ?? undefined;
+      let mediaPath: string | undefined;
+      let mediaType: string | undefined;
+      let mediaPaths: string[] | undefined;
+      let mediaTypes: string[] | undefined;
+      if (!deps.ignoreAttachments && mediaAttachment?.id) {
+        const fetched = await deps.fetchAttachment({
+          baseUrl: deps.baseUrl,
+          account: deps.account,
+          attachment: mediaAttachment,
+          sender: senderRecipient,
+          groupId,
+          maxBytes: deps.mediaMaxBytes,
+        });
+        if (fetched) {
+          mediaPath = fetched.path;
+          mediaType = fetched.contentType ?? mediaAttachment.contentType ?? undefined;
+          mediaPaths = [fetched.path];
+          mediaTypes = [mediaType ?? "application/octet-stream"];
+        }
+      }
+      const storyText = storyMessage.textAttachment?.text?.trim() ?? "";
+      const storyAuthor = sender.kind === "phone" ? (sender.uuid ?? senderRecipient) : sender.raw;
+      const storyTimestamp = normalizeStoryTimestamp(envelope.timestamp);
+      const storyContext = buildSignalStoryContext({
+        author: storyAuthor,
+        timestamp: storyTimestamp,
+        allowsReplies: storyMessage.allowsReplies === true,
+      });
+      const previewContext = buildSignalLinkPreviewContext(
+        storyMessage.textAttachment?.preview ? [storyMessage.textAttachment.preview] : undefined,
+      );
+      const kind = resolveSignalMediaKind(mediaType ?? mediaAttachment?.contentType ?? undefined);
+      const placeholder = kind ? `<media:${kind}>` : mediaAttachment ? "<media:attachment>" : "[Signal story]";
+      const bodyText = storyText || placeholder;
+      await inboundDebouncer.enqueue({
+        senderName,
+        senderDisplay,
+        senderRecipient,
+        senderPeerId,
+        groupId,
+        isGroup,
+        bodyText,
+        commandBody: storyText || bodyText,
+        bodyTextPlain: storyText || bodyText,
+        timestamp: envelope.timestamp ?? undefined,
+        messageId: typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined,
+        mediaPath,
+        mediaType,
+        mediaPaths,
+        mediaTypes,
+        untrustedContext:
+          [...storyContext, ...previewContext].length > 0
+            ? [...storyContext, ...previewContext]
+            : undefined,
+        commandAuthorized: true,
+        replyToIsStory: true,
+        storyReplyTimestamp: storyMessage.allowsReplies === true ? storyTimestamp : undefined,
+        storyReplyAuthor: storyMessage.allowsReplies === true ? storyAuthor : undefined,
+      });
       return;
     }
     if (!dataMessage) {
@@ -1463,23 +1709,24 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const hasEarlyBody =
       Boolean(messageText || quoteText) ||
       Boolean(!deps.ignoreAttachments && allAttachments.length > 0);
-    if (hasEarlyBody && ackTimestamp) {
-      maybeSendSignalAckReaction({
-        cfg: deps.cfg,
-        agentId: route.agentId,
-        sender,
-        targetTimestamp: ackTimestamp,
+    const ackEmoji = resolveAckReaction(deps.cfg, route.agentId, {
+      channel: SIGNAL_CHANNEL_ID,
+      accountId: deps.accountId,
+    }).trim();
+    const shouldSendAckReaction =
+      hasEarlyBody &&
+      Boolean(ackTimestamp) &&
+      Boolean(ackEmoji) &&
+      shouldAckReaction({
+        scope: deps.cfg.messages?.ackReactionScope,
+        isDirect: !isGroup,
         isGroup,
-        groupId,
-        wasMentioned: effectiveWasMentioned,
-        canDetectMention,
+        isMentionableGroup: isGroup && canDetectMention,
         requireMention: Boolean(requireMention),
-        accountId: deps.accountId,
-        onError: (err) => {
-          logVerbose(`Signal ack reaction failed: ${String(err)}`);
-        },
+        canDetectMention,
+        effectiveWasMentioned: effectiveWasMentioned ?? false,
+        shouldBypassMention: !requireMention,
       });
-    }
 
     let mediaPath: string | undefined;
     let mediaType: string | undefined;
@@ -1612,6 +1859,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       ...attachmentContext,
       ...stickerContext,
       ...linkPreviewContext,
+      ...storyContextLines,
       ...contactContext,
       ...pollContext,
       ...editContext,
@@ -1654,10 +1902,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       untrustedContext: untrustedContext.length > 0 ? untrustedContext : undefined,
       commandAuthorized,
       wasMentioned: effectiveWasMentioned,
+      shouldAckReaction: shouldSendAckReaction,
+      ackTargetTimestamp: ackTimestamp ?? undefined,
+      statusReactionTargetAuthor: sender.kind === "phone" ? sender.e164 : undefined,
+      statusReactionTargetAuthorUuid: sender.kind === "phone" ? sender.uuid : sender.raw,
       replyToId: quoteId,
       replyToBody: quoteText || undefined,
       replyToSender: quoteAuthor,
       replyToIsQuote: quote ? true : undefined,
+      replyToIsStory: storyContextTimestamp !== undefined,
     });
   };
 }

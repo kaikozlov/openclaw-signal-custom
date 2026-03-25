@@ -20,12 +20,15 @@ export type SignalSendOpts = {
   mediaLocalRoots?: readonly string[];
   maxBytes?: number;
   timeoutMs?: number;
+  viewOnce?: boolean;
   textMode?: "markdown" | "plain";
   textStyles?: SignalTextStyleRange[];
   mentions?: SignalMentionRange[];
   silent?: boolean;
   replyTo?: string;
   quoteAuthor?: string;
+  storyTimestamp?: number;
+  storyAuthor?: string;
 };
 
 export type SignalSendResult = {
@@ -172,6 +175,7 @@ export async function sendMessageSignal(
   })();
 
   let attachments: string[] | undefined;
+  let attachmentKind: string | undefined;
   if (opts.mediaUrl?.trim()) {
     const media = await loadWebMedia(opts.mediaUrl.trim(), {
       maxBytes,
@@ -185,10 +189,10 @@ export async function sendMessageSignal(
       media.fileName,
     );
     attachments = [saved.path];
-    const kind = media.kind;
-    if (!message && kind) {
+    attachmentKind = media.kind;
+    if (!message && attachmentKind) {
       // Avoid sending an empty body when only attachments exist.
-      message = kind === "image" ? "<media:image>" : `<media:${kind}>`;
+      message = attachmentKind === "image" ? "<media:image>" : `<media:${attachmentKind}>`;
       messageFromPlaceholder = true;
     }
   }
@@ -222,6 +226,18 @@ export async function sendMessageSignal(
   }
   if (attachments && attachments.length > 0) {
     params.attachments = attachments;
+  }
+  if (opts.viewOnce) {
+    if (!attachments || attachments.length === 0) {
+      throw new Error("Signal view-once requires an image or video attachment");
+    }
+    if (attachmentKind === "image" || attachmentKind === "video") {
+      params["view-once"] = true;
+    } else {
+      throw new Error(
+        `Signal view-once is only supported for image and video attachments (got ${attachmentKind ?? "unknown"})`,
+      );
+    }
   }
   if (opts.silent) {
     params.noUrgent = true;
@@ -268,6 +284,18 @@ export async function sendMessageSignal(
   if (quoteTimestamp && quoteAuthor) {
     params.quoteTimestamp = quoteTimestamp;
     params.quoteAuthor = quoteAuthor;
+  }
+  if (
+    typeof opts.storyTimestamp === "number" &&
+    Number.isFinite(opts.storyTimestamp) &&
+    opts.storyTimestamp > 0
+  ) {
+    const storyAuthor = opts.storyAuthor?.trim();
+    if (!storyAuthor) {
+      throw new Error("Signal story replies require a storyAuthor");
+    }
+    params["story-timestamp"] = Math.trunc(opts.storyTimestamp);
+    params["story-author"] = storyAuthor;
   }
 
   const result = await signalRpcRequestWithRetry<{ timestamp?: number }>("send", params, {

@@ -25,6 +25,15 @@ export type SignalGroupMember = {
 export type SignalGroup = {
   id?: string | null;
   name?: string | null;
+  description?: string | null;
+  pendingMembers?: SignalGroupMember[] | null;
+  requestingMembers?: SignalGroupMember[] | null;
+  bannedMembers?: SignalGroupMember[] | null;
+  permissionAddMember?: string | null;
+  permissionEditDetails?: string | null;
+  permissionSendMessage?: string | null;
+  messageExpirationTimer?: number | null;
+  groupInviteLink?: string | null;
   members?: SignalGroupMember[] | null;
   [key: string]: unknown;
 };

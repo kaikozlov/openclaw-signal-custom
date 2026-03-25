@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getGroupInfoSignal,
   joinGroupSignal,
   listGroupMembersSignal,
   quitGroupSignal,
@@ -92,8 +93,87 @@ describe("signal groups RPC", () => {
         account: "+15550001111",
         groupId: "group-1",
         name: "Core Team",
-        addMembers: ["+15550002222", "abc-123"],
-        removeMembers: ["def-456"],
+        member: ["+15550002222", "abc-123"],
+        removeMember: ["def-456"],
+      }),
+    );
+  });
+
+  it("threads extended updateGroup options using signal-cli JSON-RPC field names", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({ jsonrpc: "2.0", result: null }));
+
+    await updateGroupSignal(
+      "signal:group:group-9",
+      {
+        description: "Ops on call",
+        avatar: "/tmp/group.png",
+        addAdmins: ["signal:+15550003333"],
+        removeAdmins: ["signal:uuid:def-456"],
+        banMembers: ["+15550004444"],
+        unbanMembers: ["signal:uuid:ghi-789"],
+        resetLink: true,
+        link: "enabled-with-approval",
+        permissionAddMember: "only-admins",
+        permissionEditDetails: "every-member",
+        permissionSendMessages: "only-admins",
+        expiration: 3600,
+        memberLabelEmoji: "🛠",
+        memberLabel: "Operator",
+      },
+      { cfg },
+    );
+
+    const call = fetchMock.mock.calls[0];
+    const body = JSON.parse(String((call?.[1] as RequestInit).body)) as {
+      method: string;
+      params: Record<string, unknown>;
+    };
+    expect(body.method).toBe("updateGroup");
+    expect(body.params).toEqual(
+      expect.objectContaining({
+        account: "+15550001111",
+        groupId: "group-9",
+        description: "Ops on call",
+        avatar: "/tmp/group.png",
+        admin: ["+15550003333"],
+        removeAdmin: ["def-456"],
+        ban: ["+15550004444"],
+        unban: ["ghi-789"],
+        resetLink: true,
+        link: "enabledWithApproval",
+        setPermissionAddMember: "onlyAdmins",
+        setPermissionEditDetails: "everyMember",
+        setPermissionSendMessages: "onlyAdmins",
+        expiration: 3600,
+        memberLabelEmoji: "🛠",
+        memberLabel: "Operator",
+      }),
+    );
+  });
+
+  it("looks up a single detailed group record", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        jsonrpc: "2.0",
+        result: [
+          { id: "group-1", name: "Ignore Me" },
+          {
+            id: "group-2",
+            name: "Ops",
+            description: "Operators",
+            groupInviteLink: "https://signal.group/#ops",
+          },
+        ],
+      }),
+    );
+
+    const group = await getGroupInfoSignal("group:group-2", { cfg });
+
+    expect(group).toEqual(
+      expect.objectContaining({
+        id: "group-2",
+        name: "Ops",
+        description: "Operators",
       }),
     );
   });

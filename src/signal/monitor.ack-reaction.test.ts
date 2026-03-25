@@ -2,10 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./send-reactions.js", () => ({
   sendReactionSignal: vi.fn().mockResolvedValue({ ok: true }),
+  removeReactionSignal: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
 import { setSignalRuntime } from "../runtime.js";
-import { sendReactionSignal } from "./send-reactions.js";
+import { removeReactionSignal, sendReactionSignal } from "./send-reactions.js";
 import { createSignalEventHandler } from "./monitor/event-handler.js";
 import type { SignalReactionMessage } from "./monitor/event-handler.types.js";
 
@@ -20,7 +21,10 @@ function isReactionMessage(
 }
 
 function installRuntime(params?: {
-  dispatchReplyWithBufferedBlockDispatcher?: (args: { ctx: Record<string, unknown> }) => Promise<{
+  dispatchReplyWithBufferedBlockDispatcher?: (args: {
+    ctx: Record<string, unknown>;
+    replyOptions?: Record<string, unknown>;
+  }) => Promise<{
     queuedFinal: boolean;
     counts: { tool: number; block: number; final: number };
   }>;
@@ -351,5 +355,170 @@ describe("signal ack reactions", () => {
     await handler(createReceiveEvent());
 
     expect(callOrder).toEqual(["ack", "dispatch"]);
+  });
+
+  it("uses status reactions for queued and done lifecycle when enabled", async () => {
+    const handler = createHandler({
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15559990000",
+            accounts: {
+              default: {
+                reactionLevel: "minimal",
+              },
+            },
+          },
+        },
+        messages: {
+          ackReaction: "👀",
+          ackReactionScope: "direct",
+          statusReactions: {
+            enabled: true,
+            timing: {
+              debounceMs: 0,
+              stallSoftMs: 60_000,
+              stallHardMs: 120_000,
+            },
+            emojis: {
+              done: "✅",
+            },
+          },
+        },
+      },
+    });
+
+    await handler(createReceiveEvent());
+    await vi.waitFor(() => {
+      expect(sendReactionSignal).toHaveBeenCalledWith(
+        "+15550001111",
+        1700000000000,
+        "👀",
+        expect.any(Object),
+      );
+      expect(sendReactionSignal).toHaveBeenCalledWith(
+        "+15550001111",
+        1700000000000,
+        "✅",
+        expect.any(Object),
+      );
+    });
+    expect(removeReactionSignal).toHaveBeenCalledWith(
+      "+15550001111",
+      1700000000000,
+      "👀",
+      expect.any(Object),
+    );
+  });
+
+  it("emits a thinking lifecycle reaction before completion when partial replies stream", async () => {
+    vi.useFakeTimers();
+    installRuntime({
+      dispatchReplyWithBufferedBlockDispatcher: async ({
+        replyOptions,
+      }: {
+        ctx: Record<string, unknown>;
+        replyOptions?: Record<string, unknown>;
+      }) => {
+        const onPartialReply = replyOptions?.onPartialReply as
+          | ((payload: { text?: string }) => Promise<void>)
+          | undefined;
+        await onPartialReply?.({ text: "partial" });
+        await vi.advanceTimersByTimeAsync(0);
+        return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+      },
+    });
+    const handler = createHandler({
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15559990000",
+            accounts: {
+              default: {
+                reactionLevel: "minimal",
+              },
+            },
+          },
+        },
+        messages: {
+          ackReaction: "👀",
+          ackReactionScope: "direct",
+          statusReactions: {
+            enabled: true,
+            timing: {
+              debounceMs: 0,
+              stallSoftMs: 60_000,
+              stallHardMs: 120_000,
+            },
+            emojis: {
+              thinking: "🤔",
+              done: "✅",
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      await handler(createReceiveEvent());
+      await vi.waitFor(() => {
+        expect(sendReactionSignal).toHaveBeenCalledWith(
+          "+15550001111",
+          1700000000000,
+          "🤔",
+          expect.any(Object),
+        );
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("emits an error lifecycle reaction when no final reply is queued", async () => {
+    installRuntime({
+      dispatchReplyWithBufferedBlockDispatcher: async () => ({
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+      }),
+    });
+    const handler = createHandler({
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15559990000",
+            accounts: {
+              default: {
+                reactionLevel: "minimal",
+              },
+            },
+          },
+        },
+        messages: {
+          ackReaction: "👀",
+          ackReactionScope: "direct",
+          statusReactions: {
+            enabled: true,
+            timing: {
+              debounceMs: 0,
+              stallSoftMs: 60_000,
+              stallHardMs: 120_000,
+            },
+            emojis: {
+              error: "❌",
+            },
+          },
+        },
+      },
+    });
+
+    await handler(createReceiveEvent());
+    await vi.waitFor(() => {
+      expect(sendReactionSignal).toHaveBeenCalledWith(
+        "+15550001111",
+        1700000000000,
+        "❌",
+        expect.any(Object),
+      );
+    });
   });
 });
