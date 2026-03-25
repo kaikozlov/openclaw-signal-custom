@@ -15,8 +15,8 @@ This is a drop-in replacement for the bundled Signal channel. It covers the full
 
 **Group chat**
 - Per-group `requireMention` mode and tool/skill policies
-- Group management: add/remove members, promote admins, ban/unban, update name/description/avatar
-- Group-specific allowlists, system prompts, and history limits
+- Group management: add/remove members, promote admins, ban, and update name/description/avatar
+- Group-specific allowlists and system prompts
 
 **Rich content**
 - Sticker packs (send and list installed packs)
@@ -41,20 +41,36 @@ This is a drop-in replacement for the bundled Signal channel. It covers the full
 
 ## Install
 
+For a local repo checkout:
+
 ```bash
 git clone <your-repo-url> openclaw-signal-custom
 cd openclaw-signal-custom
 pnpm install
 ```
 
-Install into OpenClaw and enable:
+`pnpm install` only installs this repo's dependencies. It does not register the
+plugin with OpenClaw.
+
+Link the repo into OpenClaw for development:
 
 ```bash
 openclaw plugins install -l /absolute/path/to/openclaw-signal-custom
-openclaw plugins enable signal-custom
 ```
 
-If you don't want the bundled Signal channel running alongside it:
+Check that OpenClaw sees it:
+
+```bash
+openclaw plugins inspect signal-custom
+```
+
+Then restart the gateway so the linked plugin is picked up cleanly:
+
+```bash
+openclaw gateway restart
+```
+
+If you do not want the bundled Signal channel running alongside it:
 
 ```bash
 openclaw plugins disable signal
@@ -62,10 +78,8 @@ openclaw plugins disable signal
 
 If you use `plugins.allow`, add the plugin explicitly:
 
-```yaml
-plugins:
-  allow:
-    - signal-custom
+```bash
+openclaw config set plugins.allow '["signal-custom"]' --strict-json
 ```
 
 ## Setup
@@ -74,14 +88,11 @@ plugins:
 
 The plugin spawns and manages `signal-cli` for you. Point it at your Signal account:
 
-```yaml
-channels:
-  signal-custom:
-    enabled: true
-    account: "+15551234567"
-    configPath: "/Users/you/.local/share/signal-cli"
-    cliPath: "signal-cli"       # optional, defaults to "signal-cli"
-    autoStart: true
+```bash
+openclaw config set channels.signal-custom.account '"+15551234567"' --strict-json
+openclaw config set channels.signal-custom.configPath '"/Users/you/.local/share/signal-cli"' --strict-json
+openclaw config set channels.signal-custom.cliPath '"signal-cli"' --strict-json
+openclaw config set channels.signal-custom.autoStart true --strict-json
 ```
 
 Set `configPath` to your `signal-cli` data directory. This is strongly recommended — it enables the local attachment fast path and lets the daemon find your account data.
@@ -90,38 +101,43 @@ Set `configPath` to your `signal-cli` data directory. This is strongly recommend
 
 Connect to an already-running `signal-cli` JSON-RPC instance:
 
-```yaml
-channels:
-  signal-custom:
-    enabled: true
-    account: "+15551234567"
-    httpUrl: "http://127.0.0.1:8080"
-    autoStart: false
+```bash
+openclaw config set channels.signal-custom.account '"+15551234567"' --strict-json
+openclaw config set channels.signal-custom.httpUrl '"http://127.0.0.1:8080"' --strict-json
+openclaw config set channels.signal-custom.autoStart false --strict-json
 ```
 
 ### Multi-account
 
 Run multiple Signal accounts under one plugin:
 
-```yaml
-channels:
-  signal-custom:
-    enabled: true
-    defaultAccount: "personal"
-    accounts:
-      personal:
-        account: "+15551234567"
-        configPath: "/Users/you/.local/share/signal-cli"
-        autoStart: true
-      work:
-        account: "+15559876543"
-        configPath: "/Users/you/.local/share/signal-cli-work"
-        autoStart: true
+```json5
+{
+  channels: {
+    "signal-custom": {
+      defaultAccount: "personal",
+      accounts: {
+        personal: {
+          account: "+15551234567",
+          configPath: "/Users/you/.local/share/signal-cli",
+          autoStart: true,
+        },
+        work: {
+          account: "+15559876543",
+          configPath: "/Users/you/.local/share/signal-cli-work",
+          autoStart: true,
+        },
+      },
+    },
+  },
+}
 ```
 
 ## Configuration
 
-All config lives under `channels.signal-custom` in your OpenClaw YAML config. See [src/config.ts](./src/config.ts) for the full schema with types and defaults.
+All config lives under `channels.signal-custom` in your OpenClaw config file
+(`openclaw.json`, which uses JSON5 syntax), or via `openclaw config set`.
+See [src/config.ts](./src/config.ts) for the full schema with types and defaults.
 
 ### Connection
 
@@ -164,37 +180,54 @@ All config lives under `channels.signal-custom` in your OpenClaw YAML config. Se
 
 Fine-grained toggles under `actions`:
 
-```yaml
-channels:
-  signal-custom:
-    actions:
-      reactions: true
-      unsend: true
-      poll: true
-      editMessage: true
-      deleteMessage: true
-      stickers: true
-      groupManagement: true
+```json5
+{
+  channels: {
+    "signal-custom": {
+      actions: {
+        reactions: true,
+        unsend: true,
+        poll: true,
+        editMessage: true,
+        deleteMessage: true,
+        stickers: true,
+        groupManagement: true,
+      },
+    },
+  },
+}
 ```
 
 ### Group settings
 
 Per-group configuration under `groups.<group-id>`:
 
-```yaml
-channels:
-  signal-custom:
-    groups:
-      "<group-id>":
-        requireMention: true
-        enabled: true
-        allowFrom: ["+15551112222"]
-        systemPrompt: "You are a helpful assistant."
-        historyLimit: 50
-        skills: ["web-search"]
-        tools:
-          allow: ["read", "write"]
-          deny: ["exec"]
+```json5
+{
+  channels: {
+    "signal-custom": {
+      groups: {
+        "<group-id>": {
+          requireMention: true,
+          enabled: true,
+          allowFrom: ["+15551112222"],
+          systemPrompt: "You are a helpful assistant.",
+          skills: ["web-search"],
+          tools: {
+            allow: ["read", "write"],
+            deny: ["exec"],
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+You can also inspect your active config path and edit the file directly:
+
+```bash
+openclaw config file
 ```
 
 ## Development
