@@ -26,6 +26,7 @@ import {
   resolveSignalSender,
   type SignalSender,
 } from "../identity.js";
+import { resolveSignalAccount } from "../../config.js";
 import { recordSignalReactionTarget } from "../reaction-target-cache.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
@@ -385,11 +386,34 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   };
 
   const pluginRuntime = getSignalRuntime();
+  const typingTtlMs = resolveSignalAccount({
+    cfg: deps.cfg,
+    accountId: deps.accountId,
+  }).config.typingTtlMs;
   const logVerbose = (message: string) => {
     if (pluginRuntime.logging.shouldLogVerbose()) {
       deps.runtime.log?.(message);
     }
   };
+
+  function enqueueSignalSystemEvent(params: {
+    text: string;
+    sessionKey: string;
+    contextKey: string;
+    wakeAgent?: boolean;
+  }) {
+    pluginRuntime.system.enqueueSystemEvent(params.text, {
+      sessionKey: params.sessionKey,
+      contextKey: params.contextKey,
+    });
+    if (!params.wakeAgent) {
+      return;
+    }
+    pluginRuntime.system.requestHeartbeatNow({
+      sessionKey: params.sessionKey,
+      coalesceMs: 500,
+    });
+  }
 
   async function handleSignalInboundMessage(entry: SignalInboundEntry) {
     const fromLabel = formatInboundFromLabel({
@@ -589,6 +613,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             error: err,
           });
         },
+        ...(typeof typingTtlMs === "number" ? { maxDurationMs: typingTtlMs } : {}),
       },
     });
 
@@ -801,9 +826,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     ]
       .filter(Boolean)
       .join(":");
-    pluginRuntime.system.enqueueSystemEvent(text, {
+    enqueueSignalSystemEvent({
+      text,
       sessionKey: route.sessionKey,
       contextKey,
+      wakeAgent: true,
     });
     return true;
   }
@@ -911,7 +938,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       ]
         .filter(Boolean)
         .join(":");
-      pluginRuntime.system.enqueueSystemEvent(text, { sessionKey: route.sessionKey, contextKey });
+      enqueueSignalSystemEvent({ text, sessionKey: route.sessionKey, contextKey });
     };
 
     if (remoteDeleteTimestamp) {
@@ -1174,7 +1201,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           messageId,
           groupLabel,
         });
-        pluginRuntime.system.enqueueSystemEvent(text, {
+        enqueueSignalSystemEvent({
+          text,
           sessionKey: routeBare.sessionKey,
           contextKey: [
             SIGNAL_CHANNEL_ID,
@@ -1187,6 +1215,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           ]
             .filter(Boolean)
             .join(":"),
+          wakeAgent: true,
         });
       }
       return;

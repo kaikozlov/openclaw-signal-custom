@@ -21,6 +21,7 @@ describe("signal-custom config", () => {
       tcpHost: "127.0.0.1",
       tcpPort: 7583,
       sseIdleTimeoutMs: 0,
+      typingTtlMs: 30000,
       injectLinkPreviews: true,
       preserveTextStyles: true,
       retry: {
@@ -50,6 +51,37 @@ describe("signal-custom config", () => {
     });
 
     expect(parsed.success).toBe(true);
+  });
+
+  it("resolves signal-custom typing TTL with account override precedence", () => {
+    const cfg = {
+      channels: {
+        "signal-custom": {
+          account: "+15550001111",
+          typingTtlMs: 30000,
+          accounts: {
+            Work: {
+              account: "+15550002222",
+              httpUrl: "http://signal-work.local",
+              typingTtlMs: 90000,
+            },
+          },
+        },
+      },
+    } as const;
+
+    expect(
+      resolveSignalAccount({
+        cfg: cfg as never,
+        accountId: "default",
+      }).config.typingTtlMs,
+    ).toBe(30000);
+    expect(
+      resolveSignalAccount({
+        cfg: cfg as never,
+        accountId: "work",
+      }).config.typingTtlMs,
+    ).toBe(90000);
   });
 
   it("resolves accounts from channels.signal-custom", () => {

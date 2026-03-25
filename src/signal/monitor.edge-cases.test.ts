@@ -45,6 +45,7 @@ function installRuntime(overrides?: {
     ctx,
   }));
   const enqueueSystemEvent = vi.fn();
+  const requestHeartbeatNow = vi.fn();
 
   setSignalRuntime({
     channel: {
@@ -102,6 +103,7 @@ function installRuntime(overrides?: {
     },
     system: {
       enqueueSystemEvent,
+      requestHeartbeatNow,
     },
     media: {
       mediaKindFromMime: (mime?: string | null) => {
@@ -134,6 +136,7 @@ function installRuntime(overrides?: {
   return {
     dispatchReplyWithBufferedBlockDispatcher,
     enqueueSystemEvent,
+    requestHeartbeatNow,
   };
 }
 
@@ -452,7 +455,8 @@ describe("signal monitor edge cases", () => {
   });
 
   it("surfaces bare reactions as system events instead of dispatching media placeholders", async () => {
-    const { dispatchReplyWithBufferedBlockDispatcher, enqueueSystemEvent } = installRuntime();
+    const { dispatchReplyWithBufferedBlockDispatcher, enqueueSystemEvent, requestHeartbeatNow } =
+      installRuntime();
     const handler = createHandler({
       reactionMode: "all",
       shouldEmitSignalReactionNotification: () => true,
@@ -485,10 +489,15 @@ describe("signal monitor edge cases", () => {
         contextKey: expect.stringContaining("signal-custom:reaction:added"),
       }),
     );
+    expect(requestHeartbeatNow).toHaveBeenCalledWith({
+      sessionKey: "session-1",
+      coalesceMs: 500,
+    });
   });
 
   it("ignores reaction removals that use the remove field", async () => {
-    const { dispatchReplyWithBufferedBlockDispatcher, enqueueSystemEvent } = installRuntime();
+    const { dispatchReplyWithBufferedBlockDispatcher, enqueueSystemEvent, requestHeartbeatNow } =
+      installRuntime();
     const handler = createHandler({
       reactionMode: "all",
       shouldEmitSignalReactionNotification: () => true,
@@ -515,6 +524,7 @@ describe("signal monitor edge cases", () => {
 
     expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
   });
 
   it("dispatches contentful edits but keeps delete/pin/unpin as system events", async () => {
@@ -591,7 +601,8 @@ describe("signal monitor edge cases", () => {
   });
 
   it("does not crash on bare reactions with non-string emoji payloads", async () => {
-    const { dispatchReplyWithBufferedBlockDispatcher, enqueueSystemEvent } = installRuntime();
+    const { dispatchReplyWithBufferedBlockDispatcher, enqueueSystemEvent, requestHeartbeatNow } =
+      installRuntime();
     const handler = createHandler({
       reactionMode: "all",
       shouldEmitSignalReactionNotification: () => true,
@@ -625,5 +636,9 @@ describe("signal monitor edge cases", () => {
         contextKey: expect.stringContaining("signal-custom:reaction:added"),
       }),
     );
+    expect(requestHeartbeatNow).toHaveBeenCalledWith({
+      sessionKey: "session-1",
+      coalesceMs: 500,
+    });
   });
 });

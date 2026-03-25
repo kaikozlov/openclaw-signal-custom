@@ -149,6 +149,7 @@ export type SignalAccountConfig = {
   };
   responsePrefix?: string;
   mediaMaxMb?: number;
+  typingTtlMs?: number;
   reactionNotifications?: SignalReactionNotificationMode;
   reactionAllowlist?: Array<string | number>;
   actions?: SignalActionConfig;
@@ -259,6 +260,7 @@ export const SignalAccountSchemaBase = z
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: z.unknown().optional(),
     mediaMaxMb: z.number().int().positive().optional(),
+    typingTtlMs: z.number().int().positive().optional(),
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
     reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
     actions: SignalActionsSchema,

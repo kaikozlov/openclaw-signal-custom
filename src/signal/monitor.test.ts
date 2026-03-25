@@ -117,6 +117,7 @@ describe("signal monitor event handler", () => {
         },
         system: {
           enqueueSystemEvent: vi.fn(),
+          requestHeartbeatNow: vi.fn(),
         },
         media: {
           mediaKindFromMime: () => undefined,
@@ -201,6 +202,185 @@ describe("signal monitor event handler", () => {
       );
     } finally {
       global.fetch = originalFetch;
+    }
+  });
+
+  it("uses configured typing TTL for Signal typing callbacks", async () => {
+    vi.useFakeTimers();
+    const originalWarn = console.warn;
+    const warnMock = vi.fn();
+    console.warn = warnMock;
+    const originalFetch = global.fetch;
+    const fetchMock = vi.fn<typeof fetch>();
+    global.fetch = fetchMock;
+    fetchMock
+      .mockResolvedValueOnce(
+        makeResponse(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            result: {},
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        makeResponse(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            result: {},
+          }),
+        ),
+      );
+
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(
+      async ({
+        dispatcherOptions,
+      }: {
+        dispatcherOptions: {
+          typingCallbacks: {
+            onReplyStart: () => Promise<void>;
+          };
+        };
+      }) => {
+        await dispatcherOptions.typingCallbacks.onReplyStart();
+        await vi.advanceTimersByTimeAsync(5);
+        return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+      },
+    );
+
+    try {
+      setSignalRuntime({
+        channel: {
+          routing: {
+            resolveAgentRoute: () => ({
+              agentId: "agent-1",
+              sessionKey: "session-1",
+              mainSessionKey: "main-session-1",
+              accountId: "default",
+            }),
+          },
+          reply: {
+            formatInboundEnvelope: ({ body }: { body: string }) => body,
+            resolveEnvelopeFormatOptions: () => undefined,
+            finalizeInboundContext: (ctx: Record<string, unknown>) => ctx,
+            dispatchReplyWithBufferedBlockDispatcher,
+            resolveHumanDelayConfig: () => undefined,
+          },
+          session: {
+            resolveStorePath: () => "/tmp/store.json",
+            readSessionUpdatedAt: () => undefined,
+            recordInboundSession: async () => {},
+          },
+          text: {
+            hasControlCommand: () => false,
+          },
+          debounce: {
+            resolveInboundDebounceMs: () => 0,
+            createInboundDebouncer: ({ onFlush }: { onFlush: (items: unknown[]) => Promise<void> }) => ({
+              enqueue: async (item: unknown) => {
+                await onFlush([item]);
+              },
+              flushKey: async () => {},
+            }),
+          },
+          mentions: {
+            buildMentionRegexes: () => [],
+            matchesMentionPatterns: () => false,
+          },
+          groups: {
+            resolveGroupPolicy: () => ({
+              allowed: false,
+              groupConfig: undefined,
+              defaultConfig: undefined,
+            }),
+            resolveRequireMention: () => false,
+          },
+          pairing: {
+            readAllowFromStore: async () => [],
+            upsertPairingRequest: async () => undefined,
+            buildPairingReply: () => "",
+          },
+        },
+        system: {
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeatNow: vi.fn(),
+        },
+        media: {
+          mediaKindFromMime: () => undefined,
+        },
+        logging: {
+          shouldLogVerbose: () => false,
+          getChildLogger: () =>
+            ({
+              info: () => {},
+              warn: () => {},
+              error: () => {},
+            }),
+        },
+      } as never);
+
+      const handler = createSignalEventHandler({
+        runtime: {
+          log: () => {},
+          error: () => {},
+          exit: () => {},
+        },
+        cfg: {
+          channels: {
+            "signal-custom": {
+              account: "+15559990000",
+              httpUrl: "http://signal.local",
+              typingTtlMs: 5,
+            },
+          },
+        } as never,
+        baseUrl: "http://signal.local",
+        account: "+15559990000",
+        accountId: "default",
+        historyLimit: 0,
+        groupHistories: new Map(),
+        textLimit: 4000,
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        groupAllowFrom: [],
+        groupPolicy: "allowlist",
+        reactionMode: "own",
+        reactionAllowlist: [],
+        mediaMaxBytes: 8 * 1024 * 1024,
+        ignoreAttachments: false,
+        sendReadReceipts: false,
+        readReceiptsViaDaemon: false,
+        fetchAttachment: async () => null,
+        deliverReplies: async () => {},
+        resolveSignalReactionTargets: () => [],
+        isSignalReactionMessage: isReactionMessage,
+        shouldEmitSignalReactionNotification: () => false,
+        buildSignalReactionSystemEventText: () => "",
+      });
+
+      await handler({
+        event: "receive",
+        data: JSON.stringify({
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Kai",
+            timestamp: 1700000000000,
+            dataMessage: {
+              message: "hello",
+            },
+          },
+        }),
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      const secondBody = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body)) as {
+        params: Record<string, unknown>;
+      };
+      expect(secondBody.params.stop).toBe(true);
+      expect(warnMock).toHaveBeenCalledWith("[typing] TTL exceeded (5ms), auto-stopping typing indicator");
+    } finally {
+      console.warn = originalWarn;
+      global.fetch = originalFetch;
+      vi.useRealTimers();
     }
   });
 
@@ -481,6 +661,7 @@ describe("signal monitor event handler", () => {
 
   it("routes reaction-only inbound through system events", async () => {
     const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
 
     setSignalRuntime({
       channel: {
@@ -534,6 +715,7 @@ describe("signal monitor event handler", () => {
       },
       system: {
         enqueueSystemEvent,
+        requestHeartbeatNow,
       },
       media: {
         mediaKindFromMime: () => undefined,
@@ -610,5 +792,9 @@ describe("signal monitor event handler", () => {
         contextKey: expect.stringContaining("signal-custom:reaction:added"),
       }),
     );
+    expect(requestHeartbeatNow).toHaveBeenCalledWith({
+      sessionKey: "session-1",
+      coalesceMs: 500,
+    });
   });
 });
