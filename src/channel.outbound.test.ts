@@ -149,6 +149,13 @@ describe("signal outbound cfg threading", () => {
   it("forwards native Signal mentions from payload channelData", async () => {
     const cfg = { channels: { "signal-custom": {} } };
     const sendSignal = vi.fn(async () => ({ messageId: "sig-4" }));
+    setSignalRuntime({
+      channel: {
+        text: {
+          resolveMarkdownTableMode: () => "off",
+        },
+      },
+    } as never);
 
     const sendPayload = signalPlugin.outbound!.sendPayload;
     if (!sendPayload) {
@@ -158,24 +165,30 @@ describe("signal outbound cfg threading", () => {
     const result = await sendPayload({
       cfg,
       to: "signal:+15550002222",
-      text: "hello @kai",
+      text: "**@kai** hello",
       payload: {
-        text: "hello @kai",
+        text: "**@kai** hello",
         channelData: {
           "signal-custom": {
-            mentions: [{ start: 6, length: 4, recipient: "signal:uuid:abc-123" }],
+            mentions: [{ start: 2, length: 4, recipient: "signal:uuid:abc-123" }],
           },
         },
       },
       deps: { sendSignal },
     });
 
-    expect(sendSignal).toHaveBeenCalledWith("signal:+15550002222", "hello @kai", {
-      cfg,
-      maxBytes: undefined,
-      accountId: undefined,
-      mentions: [{ start: 6, length: 4, recipient: "abc-123" }],
-    });
+    expect(sendSignal).toHaveBeenCalledWith(
+      "signal:+15550002222",
+      "@kai hello",
+      expect.objectContaining({
+        cfg,
+        maxBytes: undefined,
+        accountId: undefined,
+        textMode: "plain",
+        textStyles: [{ start: 0, length: 4, style: "BOLD" }],
+        mentions: [{ start: 0, length: 4, recipient: "abc-123" }],
+      }),
+    );
     expect(result).toEqual({ channel: "signal-custom", messageId: "sig-4" });
   });
 
@@ -458,6 +471,133 @@ describe("signal outbound cfg threading", () => {
       }),
     );
     expect(result).toEqual({ channel: "signal-custom", messageId: "sig-7" });
+  });
+
+  it("preserves long media captions as follow-up text chunks", async () => {
+    const cfg = {
+      channels: {
+        "signal-custom": {
+          textChunkLimit: 11,
+        },
+      },
+    };
+    const sendSignal = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "sig-7a" })
+      .mockResolvedValueOnce({ messageId: "sig-7b" });
+    setSignalRuntime({
+      channel: {
+        text: {
+          resolveMarkdownTableMode: () => "off",
+        },
+      },
+    } as never);
+
+    const sendPayload = signalPlugin.outbound!.sendPayload;
+    if (!sendPayload) {
+      throw new Error("signal outbound sendPayload is unavailable");
+    }
+
+    const result = await sendPayload({
+      cfg,
+      to: "+15550004568",
+      text: "alpha beta gamma delta",
+      payload: {
+        text: "alpha beta gamma delta",
+        mediaUrl: "https://example.com/photo.jpg",
+      },
+      deps: { sendSignal },
+    });
+
+    expect(sendSignal).toHaveBeenCalledTimes(2);
+    expect(sendSignal).toHaveBeenNthCalledWith(
+      1,
+      "+15550004568",
+      "alpha beta",
+      expect.objectContaining({
+        cfg,
+        mediaUrl: "https://example.com/photo.jpg",
+        textMode: "plain",
+      }),
+    );
+    expect(sendSignal).toHaveBeenNthCalledWith(
+      2,
+      "+15550004568",
+      "gamma delta",
+      expect.objectContaining({
+        cfg,
+        textMode: "plain",
+      }),
+    );
+    const secondMedia = sendSignal.mock.calls[1]?.[2] as { mediaUrl?: string } | undefined;
+    expect(secondMedia?.mediaUrl).toBeUndefined();
+    expect(result).toEqual({ channel: "signal-custom", messageId: "sig-7b" });
+  });
+
+  it("chunks mention-bearing payload text after markdown normalization", async () => {
+    const cfg = {
+      channels: {
+        "signal-custom": {
+          textChunkLimit: 11,
+        },
+      },
+    };
+    const sendSignal = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "sig-mentions-1" })
+      .mockResolvedValueOnce({ messageId: "sig-mentions-2" });
+    setSignalRuntime({
+      channel: {
+        text: {
+          resolveMarkdownTableMode: () => "off",
+        },
+      },
+    } as never);
+
+    const sendPayload = signalPlugin.outbound!.sendPayload;
+    if (!sendPayload) {
+      throw new Error("signal outbound sendPayload is unavailable");
+    }
+
+    const result = await sendPayload({
+      cfg,
+      to: "+15550004569",
+      text: "**@kai** hello friend",
+      payload: {
+        text: "**@kai** hello friend",
+        channelData: {
+          "signal-custom": {
+            mentions: [{ start: 2, length: 4, recipient: "signal:+15550001111" }],
+          },
+        },
+      },
+      deps: { sendSignal },
+    });
+
+    expect(sendSignal).toHaveBeenCalledTimes(2);
+    expect(sendSignal).toHaveBeenNthCalledWith(
+      1,
+      "+15550004569",
+      "@kai hello",
+      expect.objectContaining({
+        cfg,
+        textMode: "plain",
+        textStyles: [{ start: 0, length: 4, style: "BOLD" }],
+        mentions: [{ start: 0, length: 4, recipient: "+15550001111" }],
+      }),
+    );
+    expect(sendSignal).toHaveBeenNthCalledWith(
+      2,
+      "+15550004569",
+      "friend",
+      expect.objectContaining({
+        cfg,
+        textMode: "plain",
+      }),
+    );
+    const secondMentions = sendSignal.mock.calls[1]?.[2] as { mentions?: unknown } | undefined;
+    expect(secondMentions?.mentions).toBeUndefined();
+    expect(result).toEqual({ channel: "signal-custom", messageId: "sig-mentions-2" });
   });
 
   it("keeps reply threading only on the first formatted text chunk", async () => {

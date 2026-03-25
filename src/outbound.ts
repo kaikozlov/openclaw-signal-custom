@@ -18,9 +18,10 @@ import {
   type ResolvedSignalAccount,
 } from "./config.js";
 import { SIGNAL_CHANNEL_ID } from "./constants.js";
-import { chunkTextForOutbound } from "./text-chunking.js";
 import {
+  markdownToSignalRichChunks,
   markdownToSignalTextChunks,
+  type SignalFormattedChunk,
   type SignalTextStyleRange,
 } from "./signal/format.js";
 import {
@@ -101,7 +102,8 @@ function resolveSignalTextChunks(params: {
   cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
   accountId?: string | null;
   text: string;
-}) {
+  mentions?: SignalMentionRange[];
+}): SignalFormattedChunk[] {
   const limit = resolveTextChunkLimit(params.cfg, SIGNAL_CHANNEL_ID, params.accountId ?? undefined, {
     fallbackLimit: 4000,
   });
@@ -110,9 +112,19 @@ function resolveSignalTextChunks(params: {
     accountId: params.accountId ?? undefined,
   });
   const chunks =
-    limit === undefined
-      ? markdownToSignalTextChunks(params.text, Number.POSITIVE_INFINITY, { tableMode })
-      : markdownToSignalTextChunks(params.text, limit, { tableMode });
+    params.mentions?.length
+      ? limit === undefined
+        ? markdownToSignalRichChunks(params.text, Number.POSITIVE_INFINITY, {
+            tableMode,
+            mentions: params.mentions,
+          })
+        : markdownToSignalRichChunks(params.text, limit, {
+            tableMode,
+            mentions: params.mentions,
+          })
+      : limit === undefined
+        ? markdownToSignalTextChunks(params.text, Number.POSITIVE_INFINITY, { tableMode })
+        : markdownToSignalTextChunks(params.text, limit, { tableMode });
   if (chunks.length === 0 && params.text) {
     return [{ text: params.text, styles: [] }];
   }
@@ -122,12 +134,17 @@ function resolveSignalTextChunks(params: {
 async function sendFormattedSignalTextResults(
   ctx: Parameters<
     NonNullable<NonNullable<ChannelPlugin<ResolvedSignalAccount>["outbound"]>["sendFormattedText"]>
-  >[0] & { storyTimestamp?: number; storyAuthor?: string },
+  >[0] & {
+    storyTimestamp?: number;
+    storyAuthor?: string;
+    mentions?: SignalMentionRange[];
+  },
 ): Promise<SignalSendResult[]> {
   const chunks = resolveSignalTextChunks({
     cfg: ctx.cfg,
     accountId: ctx.accountId,
     text: ctx.text,
+    mentions: (ctx as { mentions?: SignalMentionRange[] }).mentions,
   });
   const results: SignalSendResult[] = [];
   let firstChunk = true;
@@ -143,6 +160,7 @@ async function sendFormattedSignalTextResults(
       silent: ctx.silent ?? undefined,
       textMode: "plain",
       textStyles: chunk.styles,
+      mentions: chunk.mentions,
       replyTo: firstChunk ? (ctx.replyToId ?? undefined) : undefined,
       storyTimestamp: firstChunk ? storyReply?.storyTimestamp : undefined,
       storyAuthor: firstChunk ? storyReply?.storyAuthor : undefined,
@@ -153,37 +171,64 @@ async function sendFormattedSignalTextResults(
   return results;
 }
 
-async function sendFormattedSignalMediaResult(
+async function sendFormattedSignalMediaResults(
   ctx: Parameters<
     NonNullable<NonNullable<ChannelPlugin<ResolvedSignalAccount>["outbound"]>["sendFormattedMedia"]>
-  >[0] & { viewOnce?: boolean; storyTimestamp?: number; storyAuthor?: string },
-): Promise<SignalSendResult> {
+  >[0] & {
+    viewOnce?: boolean;
+    storyTimestamp?: number;
+    storyAuthor?: string;
+    mentions?: SignalMentionRange[];
+  },
+): Promise<SignalSendResult[]> {
   ctx.abortSignal?.throwIfAborted();
-  const formatted =
-    resolveSignalTextChunks({
-      cfg: ctx.cfg,
-      accountId: ctx.accountId,
-      text: ctx.text,
-    })[0] ?? {
-      text: ctx.text,
-      styles: [],
-    };
-  return await sendSignalDirect({
+  const chunks = resolveSignalTextChunks({
     cfg: ctx.cfg,
-    to: ctx.to,
-    text: formatted.text,
-    mediaUrl: ctx.mediaUrl,
-    mediaLocalRoots: ctx.mediaLocalRoots,
-    viewOnce: resolveContextViewOnce(ctx),
-    storyTimestamp: resolveContextStoryReply(ctx)?.storyTimestamp,
-    storyAuthor: resolveContextStoryReply(ctx)?.storyAuthor,
     accountId: ctx.accountId,
-    deps: ctx.deps,
-    silent: ctx.silent ?? undefined,
-    textMode: "plain",
-    textStyles: formatted.styles,
-    replyTo: ctx.replyToId ?? undefined,
+    text: ctx.text,
+    mentions: ctx.mentions,
   });
+  const firstChunk = chunks[0] ?? {
+    text: ctx.text,
+    styles: [] as SignalTextStyleRange[],
+  };
+  const results: SignalSendResult[] = [];
+  results.push(
+    await sendSignalDirect({
+      cfg: ctx.cfg,
+      to: ctx.to,
+      text: firstChunk.text,
+      mediaUrl: ctx.mediaUrl,
+      mediaLocalRoots: ctx.mediaLocalRoots,
+      viewOnce: resolveContextViewOnce(ctx),
+      storyTimestamp: resolveContextStoryReply(ctx)?.storyTimestamp,
+      storyAuthor: resolveContextStoryReply(ctx)?.storyAuthor,
+      accountId: ctx.accountId,
+      deps: ctx.deps,
+      silent: ctx.silent ?? undefined,
+      textMode: "plain",
+      textStyles: firstChunk.styles,
+      mentions: firstChunk.mentions,
+      replyTo: ctx.replyToId ?? undefined,
+    }),
+  );
+  for (const chunk of chunks.slice(1)) {
+    ctx.abortSignal?.throwIfAborted();
+    results.push(
+      await sendSignalDirect({
+        cfg: ctx.cfg,
+        to: ctx.to,
+        text: chunk.text,
+        accountId: ctx.accountId,
+        deps: ctx.deps,
+        silent: ctx.silent ?? undefined,
+        textMode: "plain",
+        textStyles: chunk.styles,
+        mentions: chunk.mentions,
+      }),
+    );
+  }
+  return results;
 }
 
 type SignalPayloadChannelData = {
@@ -346,6 +391,75 @@ function resolveContextStoryReply(
   return undefined;
 }
 
+async function sendSignalPayloadMediaWithRenderedCaption(ctx: {
+  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
+  to: string;
+  text: string;
+  mediaUrls: string[];
+  mediaLocalRoots?: readonly string[];
+  accountId?: string | null;
+  deps?: OutboundSendDeps;
+  silent?: boolean;
+  replyToId?: string;
+  viewOnce?: boolean;
+  storyReply?: SignalStoryReply;
+  mentions?: SignalMentionRange[];
+}): Promise<SignalSendResult> {
+  const renderedChunks = resolveSignalTextChunks({
+    cfg: ctx.cfg,
+    accountId: ctx.accountId,
+    text: ctx.text,
+    mentions: ctx.mentions,
+  });
+  const firstChunk = renderedChunks[0] ?? {
+    text: ctx.text,
+    styles: [] as SignalTextStyleRange[],
+  };
+  let lastResult = await sendSignalDirect({
+    cfg: ctx.cfg,
+    to: ctx.to,
+    text: firstChunk.text,
+    mediaUrl: ctx.mediaUrls[0],
+    mediaLocalRoots: ctx.mediaLocalRoots,
+    accountId: ctx.accountId,
+    deps: ctx.deps,
+    viewOnce: ctx.viewOnce,
+    storyTimestamp: ctx.storyReply?.storyTimestamp,
+    storyAuthor: ctx.storyReply?.storyAuthor,
+    silent: ctx.silent,
+    textMode: "plain",
+    textStyles: firstChunk.styles,
+    mentions: firstChunk.mentions,
+    replyTo: ctx.replyToId,
+  });
+  for (const mediaUrl of ctx.mediaUrls.slice(1)) {
+    lastResult = await sendSignalDirect({
+      cfg: ctx.cfg,
+      to: ctx.to,
+      text: "",
+      mediaUrl,
+      mediaLocalRoots: ctx.mediaLocalRoots,
+      accountId: ctx.accountId,
+      deps: ctx.deps,
+      silent: ctx.silent,
+    });
+  }
+  for (const chunk of renderedChunks.slice(1)) {
+    lastResult = await sendSignalDirect({
+      cfg: ctx.cfg,
+      to: ctx.to,
+      text: chunk.text,
+      accountId: ctx.accountId,
+      deps: ctx.deps,
+      silent: ctx.silent,
+      textMode: "plain",
+      textStyles: chunk.styles,
+      mentions: chunk.mentions,
+    });
+  }
+  return lastResult;
+}
+
 export const signalOutboundBase: Pick<
   NonNullable<ChannelPlugin<ResolvedSignalAccount>["outbound"]>,
   | "deliveryMode"
@@ -359,13 +473,17 @@ export const signalOutboundBase: Pick<
   | "sendMedia"
 > = {
   deliveryMode: "direct",
-  chunker: (text, limit) => chunkTextForOutbound(text, limit),
+  chunker: (text, limit) =>
+    markdownToSignalTextChunks(text, limit, { tableMode: "bullets" }).map((chunk) => chunk.text),
   chunkerMode: "text",
   textChunkLimit: 4000,
   sendFormattedText: async (ctx) =>
     attachChannelToResults(SIGNAL_CHANNEL_ID, await sendFormattedSignalTextResults(ctx)),
   sendFormattedMedia: async (ctx) =>
-    attachChannelToResult(SIGNAL_CHANNEL_ID, await sendFormattedSignalMediaResult(ctx)),
+    attachChannelToResult(
+      SIGNAL_CHANNEL_ID,
+      (await sendFormattedSignalMediaResults(ctx)).at(-1) ?? { messageId: "" },
+    ),
   sendPayload: async (ctx) => {
     const parts = resolvePayloadText(ctx.payload, ctx.text);
     const mentions = resolveSignalPayloadMentions(ctx.payload);
@@ -379,72 +497,22 @@ export const signalOutboundBase: Pick<
       if (parts.mediaCount !== 1) {
         throw new Error("Signal view-once requires exactly one media attachment");
       }
-      if (mentions?.length) {
-        throw new Error("Signal view-once is not supported with native mention payloads");
-      }
-    }
-
-    if (mentions?.length) {
-      const rawResult = await sendPayloadMediaSequenceOrFallback({
-        text: parts.text,
-        mediaUrls: resolvePayloadMediaUrls(ctx.payload),
-        send: async ({ text, mediaUrl, isFirst }) =>
-          await sendSignalDirect({
-            cfg: ctx.cfg,
-            to: ctx.to,
-            text,
-            mediaUrl,
-            mediaLocalRoots: ctx.mediaLocalRoots,
-            accountId: ctx.accountId,
-            deps: ctx.deps,
-            viewOnce,
-            storyTimestamp: isFirst ? storyReply?.storyTimestamp : undefined,
-            storyAuthor: isFirst ? storyReply?.storyAuthor : undefined,
-            silent: ctx.silent ?? undefined,
-            mentions: isFirst ? mentions : undefined,
-            replyTo: isFirst ? replyToId : undefined,
-          }),
-        fallbackResult: { messageId: "" },
-        sendNoMedia: async () =>
-          await sendSignalDirect({
-            cfg: ctx.cfg,
-            to: ctx.to,
-            text: parts.text,
-            accountId: ctx.accountId,
-            deps: ctx.deps,
-            silent: ctx.silent ?? undefined,
-            mentions,
-            replyTo: replyToId,
-          }),
-      });
-      return attachChannelToResult(SIGNAL_CHANNEL_ID, rawResult);
     }
 
     if (parts.hasMedia) {
-      const rawResult = await sendPayloadMediaSequenceOrFallback({
+      const rawResult = await sendSignalPayloadMediaWithRenderedCaption({
+        cfg: ctx.cfg,
+        to: ctx.to,
         text: parts.text,
         mediaUrls: parts.mediaUrls,
-        send: async ({ text, mediaUrl, isFirst }) =>
-          await sendFormattedSignalMediaResult({
-            ...ctx,
-            text,
-            mediaUrl,
-            replyToId: isFirst ? replyToId : undefined,
-            viewOnce,
-            storyTimestamp: isFirst ? storyReply?.storyTimestamp : undefined,
-            storyAuthor: isFirst ? storyReply?.storyAuthor : undefined,
-          }),
-        fallbackResult: { messageId: "" },
-        sendNoMedia: async () => {
-          const results = await sendFormattedSignalTextResults({
-            ...ctx,
-            text: parts.text,
-            replyToId,
-            storyTimestamp: storyReply?.storyTimestamp,
-            storyAuthor: storyReply?.storyAuthor,
-          });
-          return results.at(-1) ?? { messageId: "" };
-        },
+        mediaLocalRoots: ctx.mediaLocalRoots,
+        accountId: ctx.accountId,
+        deps: ctx.deps,
+        silent: ctx.silent ?? undefined,
+        replyToId,
+        viewOnce,
+        storyReply,
+        mentions,
       });
       return attachChannelToResult(SIGNAL_CHANNEL_ID, rawResult);
     }
@@ -452,6 +520,7 @@ export const signalOutboundBase: Pick<
     const results = await sendFormattedSignalTextResults({
       ...ctx,
       text: parts.text,
+      mentions,
       replyToId,
       storyTimestamp: storyReply?.storyTimestamp,
       storyAuthor: storyReply?.storyAuthor,

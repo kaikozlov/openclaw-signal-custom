@@ -127,6 +127,72 @@ describe("sendMessageSignal", () => {
     );
   });
 
+  it("collapses markdown softbreaks in prose to spaces", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        text: JSON.stringify({
+          jsonrpc: "2.0",
+          result: { timestamp: 1700000002002 },
+        }),
+      }),
+    );
+
+    await sendMessageSignal("+15550006666", "first line\nsecond line", {
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15559990000",
+            httpUrl: "http://signal.local",
+          },
+        },
+      } as never,
+    });
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      params: Record<string, unknown>;
+    };
+    expect(body.params).toEqual(
+      expect.objectContaining({
+        account: "+15559990000",
+        message: "first line second line",
+        recipient: ["+15550006666"],
+      }),
+    );
+  });
+
+  it("preserves markdown paragraph breaks and hard breaks", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        text: JSON.stringify({
+          jsonrpc: "2.0",
+          result: { timestamp: 1700000002003 },
+        }),
+      }),
+    );
+
+    await sendMessageSignal("+15550006666", "first line  \nsecond line\n\nthird paragraph", {
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15559990000",
+            httpUrl: "http://signal.local",
+          },
+        },
+      } as never,
+    });
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      params: Record<string, unknown>;
+    };
+    expect(body.params).toEqual(
+      expect.objectContaining({
+        account: "+15559990000",
+        message: "first line\nsecond line\n\nthird paragraph",
+        recipient: ["+15550006666"],
+      }),
+    );
+  });
+
   it("saves outbound media locally before sending attachment paths", async () => {
     const mediaDir = await mkdtemp(path.join(tmpdir(), "signal-send-"));
     const mediaPath = path.join(mediaDir, "clip.txt");

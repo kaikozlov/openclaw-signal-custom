@@ -232,6 +232,23 @@ function appendText(state: RenderState, value: string) {
   target.text += value;
 }
 
+function ensureTrailingNewlines(state: RenderState, count: number) {
+  if (count <= 0) {
+    return;
+  }
+  const target = resolveRenderTarget(state);
+  let trailing = 0;
+  for (let i = target.text.length - 1; i >= 0; i -= 1) {
+    if (target.text[i] !== "\n") {
+      break;
+    }
+    trailing += 1;
+  }
+  if (trailing < count) {
+    target.text += "\n".repeat(count - trailing);
+  }
+}
+
 function openStyle(state: RenderState, style: MarkdownStyle) {
   const target = resolveRenderTarget(state);
   target.openStyles.push({ style, start: target.text.length });
@@ -259,7 +276,7 @@ function appendParagraphSeparator(state: RenderState) {
   if (state.table) {
     return;
   } // Don't add paragraph separators inside tables
-  state.text += "\n\n";
+  ensureTrailingNewlines(state, 2);
 }
 
 function appendListPrefix(state: RenderState) {
@@ -294,7 +311,7 @@ function renderCodeBlock(state: RenderState, content: string) {
   target.text += code;
   target.styles.push({ start, end: start + code.length, style: "code_block" });
   if (state.env.listStack.length === 0) {
-    target.text += "\n";
+    ensureTrailingNewlines(state, 2);
   }
 }
 
@@ -611,6 +628,8 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         appendText(state, token.content ?? "");
         break;
       case "softbreak":
+        appendText(state, " ");
+        break;
       case "hardbreak":
         appendText(state, "\n");
         break;
@@ -647,7 +666,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
       case "bullet_list_close":
         state.env.listStack.pop();
         if (state.env.listStack.length === 0) {
-          state.text += "\n";
+          ensureTrailingNewlines(state, 2);
         }
         break;
       case "ordered_list_open": {
@@ -662,17 +681,14 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
       case "ordered_list_close":
         state.env.listStack.pop();
         if (state.env.listStack.length === 0) {
-          state.text += "\n";
+          ensureTrailingNewlines(state, 2);
         }
         break;
       case "list_item_open":
         appendListPrefix(state);
         break;
       case "list_item_close":
-        // Avoid double newlines (nested list's last item already added newline)
-        if (!state.text.endsWith("\n")) {
-          state.text += "\n";
-        }
+        ensureTrailingNewlines(state, 1);
         break;
       case "code_block":
       case "fence":

@@ -19,6 +19,16 @@ export type SignalFormattedText = {
   styles: SignalTextStyleRange[];
 };
 
+export type SignalRenderedMentionRange = {
+  start: number;
+  length: number;
+  recipient: string;
+};
+
+export type SignalFormattedChunk = SignalFormattedText & {
+  mentions?: SignalRenderedMentionRange[];
+};
+
 type SignalMarkdownOptions = {
   tableMode?: MarkdownTableMode;
 };
@@ -34,8 +44,24 @@ type Insertion = {
   length: number;
 };
 
+type SourceMentionRange = {
+  start: number;
+  length: number;
+  recipient: string;
+};
+
+type MentionMarker = {
+  id: number;
+  open: string;
+  close: string;
+  recipient: string;
+};
+
+const PRIVATE_USE_MARKER_START = 0xe000;
+const PRIVATE_USE_MARKER_END = 0xf8ff;
+
 function normalizeUrlForComparison(url: string): string {
-  let normalized = url.toLowerCase();
+  let normalized = url.replace(/[\uE000-\uF8FF]/g, "").toLowerCase();
   // Strip protocol
   normalized = normalized.replace(/^https?:\/\//, "");
   // Strip www. prefix
@@ -100,6 +126,27 @@ function clampStyles(styles: SignalTextStyleRange[], maxLength: number): SignalT
     }
   }
   return clamped;
+}
+
+function sliceMentionRanges(
+  mentions: SignalRenderedMentionRange[],
+  start: number,
+  end: number,
+): SignalRenderedMentionRange[] {
+  const sliced: SignalRenderedMentionRange[] = [];
+  for (const mention of mentions) {
+    const mentionEnd = mention.start + mention.length;
+    const sliceStart = Math.max(mention.start, start);
+    const sliceEnd = Math.min(mentionEnd, end);
+    if (sliceEnd > sliceStart) {
+      sliced.push({
+        start: sliceStart - start,
+        length: sliceEnd - sliceStart,
+        recipient: mention.recipient,
+      });
+    }
+  }
+  return sliced;
 }
 
 function applyInsertionsToStyles(
@@ -231,6 +278,132 @@ function renderSignalText(ir: MarkdownIR): SignalFormattedText {
   };
 }
 
+function injectMentionMarkers(
+  markdown: string,
+  mentions: SourceMentionRange[],
+): { markedMarkdown: string; markers: MentionMarker[] } {
+  if (mentions.length === 0) {
+    return { markedMarkdown: markdown, markers: [] };
+  }
+  const sorted = [...mentions]
+    .map((mention, index) => ({ ...mention, id: index }))
+    .sort((a, b) => a.start - b.start);
+  let previousEnd = 0;
+  for (const mention of sorted) {
+    if (!Number.isFinite(mention.start) || mention.start < 0) {
+      throw new Error(`Signal mention ${mention.id} has an invalid start`);
+    }
+    if (!Number.isFinite(mention.length) || mention.length <= 0) {
+      throw new Error(`Signal mention ${mention.id} has an invalid length`);
+    }
+    const end = mention.start + mention.length;
+    if (end > markdown.length) {
+      throw new Error(`Signal mention ${mention.id} exceeds message length`);
+    }
+    if (mention.start < previousEnd) {
+      throw new Error(`Signal mention ${mention.id} overlaps another mention`);
+    }
+    previousEnd = end;
+  }
+  const markers = sorted.map((mention, index) => {
+    const openCodePoint = PRIVATE_USE_MARKER_START + index * 2;
+    const closeCodePoint = openCodePoint + 1;
+    if (closeCodePoint > PRIVATE_USE_MARKER_END) {
+      throw new Error("Too many Signal mentions to encode safely");
+    }
+    return {
+      id: mention.id,
+      open: String.fromCharCode(openCodePoint),
+      close: String.fromCharCode(closeCodePoint),
+      recipient: mention.recipient,
+      start: mention.start,
+      end: mention.start + mention.length,
+    };
+  });
+
+  let markedMarkdown = markdown;
+  for (let i = markers.length - 1; i >= 0; i -= 1) {
+    const marker = markers[i] as MentionMarker & { start: number; end: number };
+    markedMarkdown =
+      markedMarkdown.slice(0, marker.end) +
+      marker.close +
+      markedMarkdown.slice(marker.end);
+    markedMarkdown =
+      markedMarkdown.slice(0, marker.start) +
+      marker.open +
+      markedMarkdown.slice(marker.start);
+  }
+
+  return {
+    markedMarkdown,
+    markers: markers.map(({ start: _start, end: _end, ...marker }) => marker),
+  };
+}
+
+function stripMentionMarkers(params: {
+  formatted: SignalFormattedText;
+  markers: MentionMarker[];
+}): SignalFormattedChunk {
+  if (params.markers.length === 0) {
+    return { ...params.formatted };
+  }
+  const eventMap = new Map<string, { id: number; kind: "open" | "close"; recipient: string }>();
+  for (const marker of params.markers) {
+    eventMap.set(marker.open, { id: marker.id, kind: "open", recipient: marker.recipient });
+    eventMap.set(marker.close, { id: marker.id, kind: "close", recipient: marker.recipient });
+  }
+
+  const positionMap = new Array<number>(params.formatted.text.length + 1).fill(0);
+  const mentionStarts = new Map<number, { start: number; recipient: string }>();
+  const mentions: SignalRenderedMentionRange[] = [];
+  let out = "";
+  let outLength = 0;
+
+  for (let i = 0; i < params.formatted.text.length; i += 1) {
+    positionMap[i] = outLength;
+    const char = params.formatted.text[i] ?? "";
+    const event = eventMap.get(char);
+    if (event) {
+      if (event.kind === "open") {
+        mentionStarts.set(event.id, { start: outLength, recipient: event.recipient });
+      } else {
+        const start = mentionStarts.get(event.id);
+        if (!start) {
+          throw new Error("Signal mention marker close encountered without open marker");
+        }
+        const length = outLength - start.start;
+        if (length > 0) {
+          mentions.push({ start: start.start, length, recipient: start.recipient });
+        }
+        mentionStarts.delete(event.id);
+      }
+      continue;
+    }
+    out += char;
+    outLength += char.length;
+  }
+  positionMap[params.formatted.text.length] = outLength;
+
+  if (mentionStarts.size > 0) {
+    throw new Error("Signal mention marker open encountered without close marker");
+  }
+
+  const styles = clampStyles(
+    params.formatted.styles.map((style) => ({
+      start: positionMap[style.start] ?? 0,
+      length: Math.max(0, (positionMap[style.start + style.length] ?? outLength) - (positionMap[style.start] ?? 0)),
+      style: style.style,
+    })),
+    out.length,
+  );
+
+  return {
+    text: out,
+    styles: mergeStyles(styles),
+    ...(mentions.length > 0 ? { mentions } : {}),
+  };
+}
+
 export function markdownToSignalText(
   markdown: string,
   options: SignalMarkdownOptions = {},
@@ -274,16 +447,16 @@ function sliceSignalStyles(
  * Styles spanning chunk boundaries are split into separate ranges for each chunk.
  */
 function splitSignalFormattedText(
-  formatted: SignalFormattedText,
+  formatted: SignalFormattedChunk,
   limit: number,
-): SignalFormattedText[] {
-  const { text, styles } = formatted;
+): SignalFormattedChunk[] {
+  const { text, styles, mentions = [] } = formatted;
 
   if (text.length <= limit) {
     return [formatted];
   }
 
-  const results: SignalFormattedText[] = [];
+  const results: SignalFormattedChunk[] = [];
   let remaining = text;
   let offset = 0; // Track position in original text for style slicing
 
@@ -295,6 +468,9 @@ function splitSignalFormattedText(
         results.push({
           text: trimmed,
           styles: mergeStyles(sliceSignalStyles(styles, offset, offset + trimmed.length)),
+          ...(sliceMentionRanges(mentions, offset, offset + trimmed.length).length > 0
+            ? { mentions: sliceMentionRanges(mentions, offset, offset + trimmed.length) }
+            : {}),
         });
       }
       break;
@@ -314,9 +490,11 @@ function splitSignalFormattedText(
     const chunk = rawChunk.trimEnd();
 
     if (chunk.length > 0) {
+      const chunkMentions = sliceMentionRanges(mentions, offset, offset + chunk.length);
       results.push({
         text: chunk,
         styles: mergeStyles(sliceSignalStyles(styles, offset, offset + chunk.length)),
+        ...(chunkMentions.length > 0 ? { mentions: chunkMentions } : {}),
       });
     }
 
@@ -394,4 +572,23 @@ export function markdownToSignalTextChunks(
   }
 
   return results;
+}
+
+export function markdownToSignalRichChunks(
+  markdown: string,
+  limit: number,
+  options: SignalMarkdownOptions & { mentions?: SourceMentionRange[] } = {},
+): SignalFormattedChunk[] {
+  const mentions = options.mentions ?? [];
+  if (mentions.length === 0) {
+    return markdownToSignalTextChunks(markdown, limit, options);
+  }
+
+  const { markedMarkdown, markers } = injectMentionMarkers(markdown ?? "", mentions);
+  const rendered = markdownToSignalText(markedMarkdown, options);
+  const stripped = stripMentionMarkers({ formatted: rendered, markers });
+  if (limit <= 0 || stripped.text.length <= limit) {
+    return [stripped];
+  }
+  return splitSignalFormattedText(stripped, limit);
 }
