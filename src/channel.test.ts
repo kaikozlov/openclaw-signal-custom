@@ -509,7 +509,7 @@ describe("signalPlugin outbound sendMedia", () => {
       channel: {
         signal: {
           messageActions: {
-            listActions: () => ["send"],
+            describeMessageTool: () => ({ actions: ["send"] }),
           },
         },
       },
@@ -523,7 +523,7 @@ describe("signalPlugin outbound sendMedia", () => {
         },
       },
     } as never;
-    const actions = signalPlugin.actions?.listActions?.({ cfg }) ?? [];
+    const actions = signalPlugin.actions?.describeMessageTool?.({ cfg })?.actions ?? [];
     expect(actions).toContain("send");
     expect(actions).toContain("edit");
     expect(actions).toContain("delete");
@@ -559,7 +559,7 @@ describe("signalPlugin outbound sendMedia", () => {
       channel: {
         signal: {
           messageActions: {
-            listActions: () => ["send"],
+            describeMessageTool: () => ({ actions: ["send"] }),
           },
         },
       },
@@ -576,7 +576,7 @@ describe("signalPlugin outbound sendMedia", () => {
         },
       },
     } as never;
-    const actions = signalPlugin.actions?.listActions?.({ cfg }) ?? [];
+    const actions = signalPlugin.actions?.describeMessageTool?.({ cfg })?.actions ?? [];
     expect(actions).toContain("sticker");
     expect(actions).toContain("sticker-search");
   });
@@ -586,7 +586,7 @@ describe("signalPlugin outbound sendMedia", () => {
       channel: {
         signal: {
           messageActions: {
-            listActions: () => ["send"],
+            describeMessageTool: () => ({ actions: ["send"] }),
           },
         },
       },
@@ -600,7 +600,7 @@ describe("signalPlugin outbound sendMedia", () => {
         },
       },
     } as never;
-    const actions = signalPlugin.actions?.listActions?.({ cfg }) ?? [];
+    const actions = signalPlugin.actions?.describeMessageTool?.({ cfg })?.actions ?? [];
     expect(actions).toContain("renameGroup");
     expect(actions).toContain("addParticipant");
     expect(actions).toContain("removeParticipant");

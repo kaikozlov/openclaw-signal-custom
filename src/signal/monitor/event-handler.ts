@@ -1,8 +1,7 @@
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
-  createReplyPrefixOptions,
-  createTypingCallbacks,
+  createChannelReplyPipeline,
   DM_GROUP_ACCESS_REASON,
   formatInboundFromLabel,
   logInboundDrop,
@@ -549,48 +548,47 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       );
     }
 
-    const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+    const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
       cfg: deps.cfg,
       agentId: route.agentId,
       channel: SIGNAL_CHANNEL_ID,
       accountId: route.accountId,
-    });
-
-    const typingCallbacks = createTypingCallbacks({
-      start: async () => {
-        if (!ctxPayload.To) {
-          return;
-        }
-        await sendTypingSignal(ctxPayload.To, {
-          cfg: deps.cfg,
-          accountId: deps.accountId,
-        });
-      },
-      onStartError: (err) => {
-        logTypingFailure({
-          log: logVerbose,
-          channel: SIGNAL_CHANNEL_ID,
-          target: ctxPayload.To ?? undefined,
-          error: err,
-        });
-      },
-      stop: async () => {
-        if (!ctxPayload.To) {
-          return;
-        }
-        await sendTypingSignal(ctxPayload.To, {
-          cfg: deps.cfg,
-          accountId: deps.accountId,
-          stop: true,
-        });
-      },
-      onStopError: (err) => {
-        logTypingFailure({
-          log: logVerbose,
-          channel: SIGNAL_CHANNEL_ID,
-          target: ctxPayload.To ?? undefined,
-          error: err,
-        });
+      typing: {
+        start: async () => {
+          if (!ctxPayload.To) {
+            return;
+          }
+          await sendTypingSignal(ctxPayload.To, {
+            cfg: deps.cfg,
+            accountId: deps.accountId,
+          });
+        },
+        onStartError: (err) => {
+          logTypingFailure({
+            log: logVerbose,
+            channel: SIGNAL_CHANNEL_ID,
+            target: ctxPayload.To ?? undefined,
+            error: err,
+          });
+        },
+        stop: async () => {
+          if (!ctxPayload.To) {
+            return;
+          }
+          await sendTypingSignal(ctxPayload.To, {
+            cfg: deps.cfg,
+            accountId: deps.accountId,
+            stop: true,
+          });
+        },
+        onStopError: (err) => {
+          logTypingFailure({
+            log: logVerbose,
+            channel: SIGNAL_CHANNEL_ID,
+            target: ctxPayload.To ?? undefined,
+            error: err,
+          });
+        },
       },
     });
 
@@ -599,9 +597,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         ctx: ctxPayload,
         cfg: deps.cfg,
         dispatcherOptions: {
-          ...prefixOptions,
+          ...replyPipeline,
           humanDelay: pluginRuntime.channel.reply.resolveHumanDelayConfig(deps.cfg, route.agentId),
-          typingCallbacks,
           deliver: async (payload) => {
             await deps.deliverReplies({
               replies: [payload],

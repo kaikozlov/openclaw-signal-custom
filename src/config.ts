@@ -11,7 +11,6 @@ import {
   type GroupToolPolicyBySenderConfig,
   type GroupToolPolicyConfig,
   type OpenClawConfig,
-  DmConfigSchema,
 } from "./runtime-api.js";
 import { z } from "zod";
 import { SIGNAL_CHANNEL_ID } from "./constants.js";
@@ -42,6 +41,12 @@ const RetryConfigSchema = z
   })
   .strict()
   .optional();
+
+const DmConfigSchema = z
+  .object({
+    historyLimit: z.number().int().min(0).optional(),
+  })
+  .strict();
 
 const SignalGroupSchema = z
   .object({

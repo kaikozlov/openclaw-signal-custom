@@ -1,5 +1,6 @@
 import MarkdownIt from "markdown-it";
-import { chunkTextForOutbound, type MarkdownTableMode } from "../runtime-api.js";
+import type { MarkdownTableMode } from "../runtime-api.js";
+import { chunkTextForOutbound } from "../text-chunking.js";
 
 type ListState = {
   type: "bullet" | "ordered";

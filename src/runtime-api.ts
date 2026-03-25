@@ -86,14 +86,11 @@ export {
   readStringParam,
 } from "openclaw/plugin-sdk/param-readers";
 export { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
-
 export {
-  DmConfigSchema,
-  chunkTextForOutbound,
   createActionGate,
-  createReplyPrefixOptions,
-  createTypingCallbacks,
   jsonResult,
-  loadOutboundMediaFromUrl,
   resolveAckReaction,
-} from "./sdk-compat.js";
+} from "openclaw/plugin-sdk/agent-runtime";
+export { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
+export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+export { loadWebMedia } from "openclaw/plugin-sdk/web-media";

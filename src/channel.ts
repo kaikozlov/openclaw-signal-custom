@@ -3,7 +3,6 @@ import {
   buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,
   buildChannelConfigSchema,
-  chunkTextForOutbound,
   collectStatusIssuesFromLastError,
   createActionGate,
   createDefaultChannelRuntimeState,
@@ -20,7 +19,10 @@ import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   readStringParam,
+  resolveReactionMessageId,
   setAccountEnabledInConfigSection,
+  type ChannelMessageActionAdapter,
+  type ChannelMessageActionName,
   type ChannelGroupContext,
   type ChannelPlugin,
   type GroupToolPolicyBySenderConfig,
@@ -38,6 +40,7 @@ import {
 } from "./config.js";
 import { SIGNAL_CHANNEL_ID, SIGNAL_META, stripSignalChannelPrefix } from "./constants.js";
 import { getSignalRuntime } from "./runtime.js";
+import { chunkTextForOutbound } from "./text-chunking.js";
 import {
   markdownToSignalTextChunks,
   type SignalTextStyleRange,
@@ -78,18 +81,33 @@ type ReactionToolContext = {
   currentMessageId?: string | number;
 };
 
-const signalMessageActions = {
-  listActions: ({ cfg }: { cfg: Parameters<typeof listSignalAccountIds>[0] }) => {
-    const actions = new Set<string>();
+const SIGNAL_GROUP_MANAGEMENT_ACTIONS = [
+  "renameGroup",
+  "addParticipant",
+  "removeParticipant",
+  "leaveGroup",
+  "member-info",
+] as const;
+
+const SIGNAL_LOCAL_MESSAGE_ACTIONS = [
+  "react",
+  "edit",
+  "delete",
+  "unsend",
+  "sticker",
+  "sticker-search",
+  ...SIGNAL_GROUP_MANAGEMENT_ACTIONS,
+] as const satisfies readonly ChannelMessageActionName[];
+
+const signalMessageActions: ChannelMessageActionAdapter = {
+  describeMessageTool: ({ cfg }: { cfg: Parameters<typeof listSignalAccountIds>[0] }) => {
     const configuredAccounts = listSignalAccountIds(cfg)
       .map((accountId) => resolveSignalAccount({ cfg, accountId }))
       .filter((account) => account.enabled && account.configured);
     if (configuredAccounts.length === 0) {
-      return Array.from(actions);
+      return null;
     }
-    if (actions.size === 0) {
-      actions.add("send");
-    }
+    const actions = new Set<ChannelMessageActionName>(["send"]);
     const reactionsEnabled = configuredAccounts.some((account) =>
       createSignalActionGate(account.config.actions)("reactions"),
     );
@@ -129,19 +147,13 @@ const signalMessageActions = {
         actions.add(action);
       }
     }
-    return Array.from(actions);
+    return { actions: Array.from(actions) };
   },
-  supportsAction: ({ action }: { action: string }) =>
-    action === "react" ||
-    action === "edit" ||
-    action === "delete" ||
-    action === "unsend" ||
-    action === "sticker" ||
-    action === "sticker-search" ||
-    SIGNAL_GROUP_MANAGEMENT_ACTIONS.includes(
-      action as (typeof SIGNAL_GROUP_MANAGEMENT_ACTIONS)[number],
+  supportsAction: ({ action }) =>
+    SIGNAL_LOCAL_MESSAGE_ACTIONS.includes(
+      action as (typeof SIGNAL_LOCAL_MESSAGE_ACTIONS)[number],
     ),
-  handleAction: async (ctx: any) => {
+  handleAction: async (ctx) => {
     if (ctx.action === "edit") {
       const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
       if (!createSignalActionGate(actionConfig)("editMessage")) {
@@ -396,14 +408,6 @@ type SignalActionConfig = {
   groupManagement?: boolean;
 };
 
-const SIGNAL_GROUP_MANAGEMENT_ACTIONS = [
-  "renameGroup",
-  "addParticipant",
-  "removeParticipant",
-  "leaveGroup",
-  "member-info",
-] as const;
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -487,17 +491,6 @@ function resolveSignalReactionDestination(raw: string): { recipient?: string; gr
   }
   const recipient = normalizeSignalReactionAuthor(trimmed);
   return recipient ? { recipient } : {};
-}
-
-function resolveReactionMessageId(params: {
-  args: Record<string, unknown>;
-  toolContext?: ReactionToolContext;
-}): string | number | undefined {
-  const direct = params.args.messageId;
-  if (typeof direct === "string" || typeof direct === "number") {
-    return direct;
-  }
-  return params.toolContext?.currentMessageId;
 }
 
 function normalizeReactionMessageIdAndEmoji(params: {
@@ -882,11 +875,7 @@ async function sendSignalPayloadOutbound(params: {
   return { channel: SIGNAL_CHANNEL_ID, ...lastResult };
 }
 
-type LegacySignalPlugin = ChannelPlugin<ResolvedSignalAccount> & {
-  actions?: typeof signalMessageActions;
-};
-
-const signalPluginImpl: ChannelPlugin<ResolvedSignalAccount> = {
+export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   id: SIGNAL_CHANNEL_ID,
   meta: {
     ...meta,
@@ -908,7 +897,7 @@ const signalPluginImpl: ChannelPlugin<ResolvedSignalAccount> = {
     groupManagement: true,
     blockStreaming: true,
   },
-  actions: signalMessageActions as never,
+  actions: signalMessageActions,
   streaming: {
     blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
   },
@@ -1270,5 +1259,3 @@ const signalPluginImpl: ChannelPlugin<ResolvedSignalAccount> = {
     },
   },
 };
-
-export const signalPlugin = signalPluginImpl as unknown as LegacySignalPlugin;

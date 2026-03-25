@@ -1,4 +1,4 @@
-import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";
+import { loadWebMedia, type OpenClawConfig } from "../runtime-api.js";
 import { SIGNAL_CHANNEL_ID, stripSignalChannelPrefix } from "../constants.js";
 import { resolveSignalAccount, resolveSignalMarkdownTableMode } from "../config.js";
 import { getSignalRuntime } from "../runtime.js";
@@ -173,9 +173,9 @@ export async function sendMessageSignal(
 
   let attachments: string[] | undefined;
   if (opts.mediaUrl?.trim()) {
-    const media = await loadOutboundMediaFromUrl(opts.mediaUrl.trim(), {
+    const media = await loadWebMedia(opts.mediaUrl.trim(), {
       maxBytes,
-      mediaLocalRoots: opts.mediaLocalRoots,
+      localRoots: opts.mediaLocalRoots,
     });
     const saved = await getSignalRuntime().channel.media.saveMediaBuffer(
       media.buffer,

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSignalEventHandler } from "./monitor/event-handler.js";
+import * as runtimeApi from "../runtime-api.js";
 import { setSignalRuntime } from "../runtime.js";
 import type { SignalReactionMessage } from "./monitor/event-handler.types.js";
 
@@ -34,8 +35,6 @@ function createBaseHandler(params?: {
   groupPolicy?: "open" | "allowlist" | "disabled";
   groupAllowFrom?: string[];
   dispatchSpy?: ReturnType<typeof vi.fn>;
-  readAllowFromStoreSpy?: ReturnType<typeof vi.fn>;
-  upsertPairingRequestSpy?: ReturnType<typeof vi.fn>;
 }) {
   const dispatchReplyWithBufferedBlockDispatcher =
     params?.dispatchSpy ??
@@ -43,10 +42,6 @@ function createBaseHandler(params?: {
       queuedFinal: true,
       counts: { tool: 0, block: 0, final: 1 },
     }));
-  const readAllowFromStore =
-    params?.readAllowFromStoreSpy ?? vi.fn(async () => [] as string[]);
-  const upsertPairingRequest =
-    params?.upsertPairingRequestSpy ?? vi.fn(async () => ({ code: "PAIR", created: true }));
 
   setSignalRuntime({
     channel: {
@@ -93,11 +88,6 @@ function createBaseHandler(params?: {
           defaultConfig: undefined,
         }),
         resolveRequireMention: () => false,
-      },
-      pairing: {
-        readAllowFromStore,
-        upsertPairingRequest,
-        buildPairingReply: () => "",
       },
     },
     system: {
@@ -165,8 +155,6 @@ function createBaseHandler(params?: {
   return {
     handler,
     dispatchReplyWithBufferedBlockDispatcher,
-    readAllowFromStore,
-    upsertPairingRequest,
   };
 }
 
@@ -176,14 +164,15 @@ describe("signal pairing and allowlist isolation", () => {
   });
 
   it("does not treat DM pairing-store entries as group allowlist authorization", async () => {
-    const { handler, dispatchReplyWithBufferedBlockDispatcher, readAllowFromStore } =
-      createBaseHandler({
-        dmPolicy: "pairing",
-        allowFrom: [],
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["+15550002222"],
-      });
-    readAllowFromStore.mockResolvedValueOnce(["+15550001111"]);
+    const readAllowFromStore = vi
+      .spyOn(runtimeApi, "readStoreAllowFromForDmPolicy")
+      .mockResolvedValueOnce(["+15550001111"]);
+    const { handler, dispatchReplyWithBufferedBlockDispatcher } = createBaseHandler({
+      dmPolicy: "pairing",
+      allowFrom: [],
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["+15550002222"],
+    });
 
     await handler({
       event: "receive",
@@ -202,16 +191,18 @@ describe("signal pairing and allowlist isolation", () => {
     });
 
     expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    readAllowFromStore.mockRestore();
   });
 
   it("reads pairing allow store with account-scoped key", async () => {
-    const readAllowFromStore = vi.fn(async () => ["+15550002222"]);
+    const readAllowFromStore = vi
+      .spyOn(runtimeApi, "readStoreAllowFromForDmPolicy")
+      .mockResolvedValueOnce(["+15550002222"]);
     const { handler, dispatchReplyWithBufferedBlockDispatcher } = createBaseHandler({
       accountId: "work",
       dmPolicy: "pairing",
       allowFrom: [],
       groupAllowFrom: [],
-      readAllowFromStoreSpy: readAllowFromStore,
     });
 
     await handler({
@@ -229,20 +220,23 @@ describe("signal pairing and allowlist isolation", () => {
     });
 
     expect(readAllowFromStore).toHaveBeenCalledWith({
-      channel: "signal-custom",
+      provider: "signal-custom",
       accountId: "work",
+      dmPolicy: "pairing",
     });
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+    readAllowFromStore.mockRestore();
   });
 
   it("stores pairing requests with account-scoped key", async () => {
-    const upsertPairingRequest = vi.fn(async () => ({ code: "PAIR", created: true }));
+    const upsertPairingRequest = vi
+      .spyOn(runtimeApi, "upsertChannelPairingRequest")
+      .mockResolvedValueOnce({ code: "PAIR", created: true });
     const { handler, dispatchReplyWithBufferedBlockDispatcher } = createBaseHandler({
       accountId: "work",
       dmPolicy: "pairing",
       allowFrom: [],
       groupAllowFrom: [],
-      upsertPairingRequestSpy: upsertPairingRequest,
     });
 
     await handler({
@@ -267,5 +261,6 @@ describe("signal pairing and allowlist isolation", () => {
     });
     expect(sendMessageSignalMock).toHaveBeenCalled();
     expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    upsertPairingRequest.mockRestore();
   });
 });
