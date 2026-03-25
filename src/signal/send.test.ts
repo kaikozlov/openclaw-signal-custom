@@ -180,9 +180,9 @@ describe("sendMessageSignal", () => {
           account: "+15559990000",
           attachments: ["/tmp/openclaw-signal-custom-media/clip.txt"],
           recipient: ["+15550007777"],
+          message: "",
         }),
       );
-      expect(body.params.message).toBe("<media:document>");
     } finally {
       await rm(mediaDir, { recursive: true, force: true });
     }
@@ -243,10 +243,10 @@ describe("sendMessageSignal", () => {
           account: "+15559990000",
           attachments: ["/tmp/openclaw-signal-custom-media/photo.png"],
           recipient: ["+15550007778"],
+          message: "",
           "view-once": true,
         }),
       );
-      expect(body.params.message).toBe("<media:image>");
     } finally {
       await rm(mediaDir, { recursive: true, force: true });
     }
@@ -342,6 +342,55 @@ describe("sendMessageSignal", () => {
         recipient: ["+15550007781"],
         "story-timestamp": 1700000001111,
         "story-author": "uuid:123e4567-e89b-12d3-a456-426614174000",
+      }),
+    );
+  });
+
+  it("allows quote-only sends without inventing body text", async () => {
+    recordSignalReactionTarget({
+      recipient: "+15550007782",
+      messageId: "1700000001111",
+      senderId: "+15550007782",
+      senderE164: "+15550007782",
+    });
+    setSignalRuntime({
+      channel: {
+        text: {
+          resolveMarkdownTableMode: () => "off",
+        },
+      },
+    } as never);
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        text: JSON.stringify({
+          jsonrpc: "2.0",
+          result: { timestamp: 1700000003003 },
+        }),
+      }),
+    );
+
+    await sendMessageSignal("+15550007782", "", {
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15559990000",
+            httpUrl: "http://signal.local",
+          },
+        },
+      } as never,
+      replyTo: "1700000001111",
+    });
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      params: Record<string, unknown>;
+    };
+    expect(body.params).toEqual(
+      expect.objectContaining({
+        account: "+15559990000",
+        message: "",
+        recipient: ["+15550007782"],
+        quoteTimestamp: 1700000001111,
+        quoteAuthor: "+15550007782",
       }),
     );
   });

@@ -13,6 +13,10 @@ describe("chunkTextForOutbound", () => {
   it("falls back to hard limits when no whitespace is available", () => {
     expect(chunkTextForOutbound("abcdefghij", 4)).toEqual(["abcd", "efgh", "ij"]);
   });
+
+  it("keeps single-newline paragraphs together until the limit is exceeded", () => {
+    expect(chunkTextForOutbound("alpha\nbeta\n\ngamma", 12)).toEqual(["alpha\nbeta", "gamma"]);
+  });
 });
 
 describe("chunkMarkdownIR", () => {
@@ -37,14 +41,14 @@ describe("chunkMarkdownIR", () => {
 
     expect(chunks).toEqual([
       {
-        text: "alpha beta",
-        styles: [{ start: 6, end: 10, style: "bold" }],
+        text: "alpha",
+        styles: [],
         links: [],
       },
       {
-        text: "gamma",
-        styles: [],
-        links: [{ start: 0, end: 5, href: "https://example.com" }],
+        text: "beta gamma",
+        styles: [{ start: 0, end: 4, style: "bold" }],
+        links: [{ start: 5, end: 10, href: "https://example.com" }],
       },
     ]);
   });

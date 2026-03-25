@@ -35,6 +35,7 @@ import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../s
 import { removeReactionSignal, sendReactionSignal } from "../send-reactions.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
 import type {
+  SignalAttachment,
   SignalDataMessage,
   SignalEnvelope,
   SignalEventHandlerDeps,
@@ -472,6 +473,87 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     });
   }
 
+  async function fetchInboundMediaBundle(params: {
+    attachments: SignalAttachment[];
+    senderRecipient: string;
+    groupId?: string;
+  }): Promise<{
+    mediaPath?: string;
+    mediaType?: string;
+    mediaCaption?: string;
+    mediaPaths?: string[];
+    mediaTypes?: string[];
+    mediaCaptions?: string[];
+    mediaDimension?: { width?: number; height?: number };
+    mediaDimensions?: Array<{ width?: number; height?: number }>;
+  }> {
+    if (deps.ignoreAttachments || params.attachments.length === 0) {
+      return {};
+    }
+
+    const fetchedMedia: Array<{
+      path: string;
+      contentType?: string;
+      caption?: string;
+      width?: number;
+      height?: number;
+    }> = [];
+    const fetchResults = await Promise.allSettled(
+      params.attachments.map(async (attachment) => {
+        if (!attachment?.id) {
+          return null;
+        }
+        const fetched = await deps.fetchAttachment({
+          baseUrl: deps.baseUrl,
+          account: deps.account,
+          attachment,
+          sender: params.senderRecipient,
+          groupId: params.groupId,
+          maxBytes: deps.mediaMaxBytes,
+        });
+        if (!fetched) {
+          return null;
+        }
+        return {
+          path: fetched.path,
+          contentType: fetched.contentType ?? attachment.contentType ?? undefined,
+          caption: normalizeCaptionValue(attachment.caption),
+          width: normalizeDimensionValue(attachment.width),
+          height: normalizeDimensionValue(attachment.height),
+        };
+      }),
+    );
+    for (const result of fetchResults) {
+      if (result.status === "rejected") {
+        deps.runtime.error?.(`attachment fetch failed: ${String(result.reason)}`);
+        continue;
+      }
+      if (result.value) {
+        fetchedMedia.push(result.value);
+      }
+    }
+    if (fetchedMedia.length === 0) {
+      return {};
+    }
+
+    const mediaCaptions = fetchedMedia.map((entry) => entry.caption ?? "");
+    const fetchedDimensions = fetchedMedia.map((entry) => ({
+      width: entry.width,
+      height: entry.height,
+    }));
+    const hasDimensions = fetchedDimensions.some((entry) => entry.width || entry.height);
+    return {
+      mediaPath: fetchedMedia[0]?.path,
+      mediaType: fetchedMedia[0]?.contentType ?? params.attachments[0]?.contentType ?? undefined,
+      mediaCaption: fetchedMedia[0]?.caption,
+      mediaPaths: fetchedMedia.map((entry) => entry.path),
+      mediaTypes: fetchedMedia.map((entry) => entry.contentType ?? "application/octet-stream"),
+      mediaCaptions: mediaCaptions.some((entry) => entry.trim().length > 0) ? mediaCaptions : undefined,
+      mediaDimension: hasDimensions ? fetchedDimensions[0] : undefined,
+      mediaDimensions: hasDimensions ? fetchedDimensions : undefined,
+    };
+  }
+
   async function handleSignalInboundMessage(entry: SignalInboundEntry) {
     const fromLabel = formatInboundFromLabel({
       isGroup: entry.isGroup,
@@ -530,6 +612,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           }),
       });
     }
+    const hasInboundMedia =
+      Boolean(entry.mediaPath || entry.mediaType || entry.mediaCaption) ||
+      Boolean(Array.isArray(entry.mediaPaths) && entry.mediaPaths.length > 0) ||
+      Boolean(Array.isArray(entry.mediaTypes) && entry.mediaTypes.length > 0) ||
+      Boolean(Array.isArray(entry.mediaCaptions) && entry.mediaCaptions.length > 0);
+    const bodyForReply = hasInboundMedia ? entry.bodyText : combinedBody;
     const signalToRaw = entry.isGroup
       ? `group:${entry.groupId}`
       : `${SIGNAL_CHANNEL_ID}:${entry.senderRecipient}`;
@@ -543,7 +631,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           }))
         : undefined;
     const ctxPayload = pluginRuntime.channel.reply.finalizeInboundContext({
-      Body: combinedBody,
+      Body: bodyForReply,
       BodyForAgent: entry.bodyText,
       InboundHistory: inboundHistory,
       RawBody: entry.bodyText,
@@ -626,9 +714,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     });
 
     if (pluginRuntime.logging.shouldLogVerbose()) {
-      const preview = body.slice(0, 200).replace(/\n/g, "\\n");
+      const preview = bodyForReply.slice(0, 200).replace(/\n/g, "\\n");
       logVerbose(
-        `signal inbound: from=${ctxPayload.From} len=${body.length} preview="${preview}"`,
+        `signal inbound: from=${ctxPayload.From} len=${bodyForReply.length} preview="${preview}"`,
       );
     }
 
@@ -1422,22 +1510,26 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       const groupId = storyMessage.groupId?.trim() || undefined;
       const isGroup = Boolean(groupId);
       const mediaAttachment = storyMessage.fileAttachment ?? undefined;
+      const storyMediaPromise =
+        !deps.ignoreAttachments && mediaAttachment?.id
+          ? deps.fetchAttachment({
+              baseUrl: deps.baseUrl,
+              account: deps.account,
+              attachment: mediaAttachment,
+              sender: senderRecipient,
+              groupId,
+              maxBytes: deps.mediaMaxBytes,
+            })
+          : null;
       let mediaPath: string | undefined;
       let mediaType: string | undefined;
       let mediaPaths: string[] | undefined;
       let mediaTypes: string[] | undefined;
-      if (!deps.ignoreAttachments && mediaAttachment?.id) {
-        const fetched = await deps.fetchAttachment({
-          baseUrl: deps.baseUrl,
-          account: deps.account,
-          attachment: mediaAttachment,
-          sender: senderRecipient,
-          groupId,
-          maxBytes: deps.mediaMaxBytes,
-        });
+      if (storyMediaPromise) {
+        const fetched = await storyMediaPromise;
         if (fetched) {
           mediaPath = fetched.path;
-          mediaType = fetched.contentType ?? mediaAttachment.contentType ?? undefined;
+          mediaType = fetched.contentType ?? mediaAttachment?.contentType ?? undefined;
           mediaPaths = [fetched.path];
           mediaTypes = [mediaType ?? "application/octet-stream"];
         }
@@ -1571,6 +1663,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         }
       }
     }
+
+    const inboundMediaPromise =
+      !deps.ignoreAttachments && allAttachments.length > 0
+        ? fetchInboundMediaBundle({
+            attachments: allAttachments,
+            senderRecipient,
+            groupId,
+          })
+        : null;
 
     if (
       handleSignalControlOnlyInbound({
@@ -1737,67 +1838,17 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     let mediaDimension: { width?: number; height?: number } | undefined;
     let mediaDimensions: Array<{ width?: number; height?: number }> | undefined;
     let placeholder = "";
-    if (!deps.ignoreAttachments && allAttachments.length > 0) {
-      const fetchedMedia: Array<{
-        path: string;
-        contentType?: string;
-        caption?: string;
-        width?: number;
-        height?: number;
-      }> = [];
-      const fetchResults = await Promise.allSettled(
-        allAttachments.map(async (attachment) => {
-          if (!attachment?.id) {
-            return null;
-          }
-          const fetched = await deps.fetchAttachment({
-            baseUrl: deps.baseUrl,
-            account: deps.account,
-            attachment,
-            sender: senderRecipient,
-            groupId,
-            maxBytes: deps.mediaMaxBytes,
-          });
-          if (!fetched) {
-            return null;
-          }
-          return {
-            path: fetched.path,
-            contentType: fetched.contentType ?? attachment.contentType ?? undefined,
-            caption: normalizeCaptionValue(attachment.caption),
-            width: normalizeDimensionValue(attachment.width),
-            height: normalizeDimensionValue(attachment.height),
-          };
-        }),
-      );
-      for (const result of fetchResults) {
-        if (result.status === "rejected") {
-          deps.runtime.error?.(`attachment fetch failed: ${String(result.reason)}`);
-          continue;
-        }
-        if (result.value) {
-          fetchedMedia.push(result.value);
-        }
-      }
-      if (fetchedMedia.length > 0) {
-        mediaPath = fetchedMedia[0]?.path;
-        mediaType = fetchedMedia[0]?.contentType ?? allAttachments[0]?.contentType ?? undefined;
-        mediaCaption = fetchedMedia[0]?.caption;
-        mediaPaths = fetchedMedia.map((entry) => entry.path);
-        mediaTypes = fetchedMedia.map((entry) => entry.contentType ?? "application/octet-stream");
-        mediaCaptions = fetchedMedia.map((entry) => entry.caption ?? "");
-        if (!mediaCaptions.some((entry) => entry.trim().length > 0)) {
-          mediaCaptions = undefined;
-        }
-        const fetchedDimensions = fetchedMedia.map((entry) => ({
-          width: entry.width,
-          height: entry.height,
-        }));
-        if (fetchedDimensions.some((entry) => entry.width || entry.height)) {
-          mediaDimension = fetchedDimensions[0];
-          mediaDimensions = fetchedDimensions;
-        }
-      }
+    if (inboundMediaPromise) {
+      ({
+        mediaPath,
+        mediaType,
+        mediaCaption,
+        mediaPaths,
+        mediaTypes,
+        mediaCaptions,
+        mediaDimension,
+        mediaDimensions,
+      } = await inboundMediaPromise);
     }
 
     const kind = resolveSignalMediaKind(mediaType ?? allAttachments[0]?.contentType ?? undefined);
@@ -1829,14 +1880,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           ? dataMessage.timestamp
           : undefined;
     if (deps.sendReadReceipts && !deps.readReceiptsViaDaemon && !isGroup && receiptTimestamp) {
-      try {
-        await sendReadReceiptSignal(`${SIGNAL_CHANNEL_ID}:${senderRecipient}`, receiptTimestamp, {
-          cfg: deps.cfg,
-          accountId: deps.accountId,
-        });
-      } catch (err) {
+      void sendReadReceiptSignal(`${SIGNAL_CHANNEL_ID}:${senderRecipient}`, receiptTimestamp, {
+        cfg: deps.cfg,
+        accountId: deps.accountId,
+      }).catch((err) => {
         logVerbose(`signal read receipt failed for ${senderDisplay}: ${String(err)}`);
-      }
+      });
     } else if (
       deps.sendReadReceipts &&
       !deps.readReceiptsViaDaemon &&

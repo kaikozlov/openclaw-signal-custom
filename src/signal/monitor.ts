@@ -1,3 +1,6 @@
+import { readFile, stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import path from "node:path";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -206,6 +209,31 @@ function normalizeAllowList(raw?: Array<string | number>): string[] {
   return (raw ?? []).map((entry) => String(entry).trim()).filter(Boolean);
 }
 
+function resolveSignalAttachmentStorePath(configPath?: string): string {
+  const trimmedConfigPath = configPath?.trim();
+  if (trimmedConfigPath) {
+    return path.join(trimmedConfigPath, "attachments");
+  }
+  const xdgDataHome = process.env["XDG_DATA_HOME"]?.trim();
+  const dataHome = xdgDataHome || path.join(homedir(), ".local", "share");
+  return path.join(dataHome, "signal-cli", "attachments");
+}
+
+function resolveSignalStoredAttachmentPath(params: {
+  configPath?: string;
+  attachment: SignalAttachment;
+}): string | undefined {
+  const id = params.attachment.id?.trim();
+  if (!id) {
+    return undefined;
+  }
+  const fileName = path.basename(id);
+  if (!fileName || fileName !== id) {
+    return undefined;
+  }
+  return path.join(resolveSignalAttachmentStorePath(params.configPath), fileName);
+}
+
 function resolveSignalReactionTimestamp(value: number | string | null | undefined): number | null {
   if (typeof value === "number" && Number.isFinite(value) && value > 0) {
     return value;
@@ -384,13 +412,14 @@ async function waitForSignalDaemonReady(params: {
   throw new Error(`signal daemon not ready (${lastError ?? "unknown error"})`);
 }
 
-async function fetchAttachment(params: {
+export async function fetchAttachment(params: {
   baseUrl: string;
   account?: string;
   attachment: SignalAttachment;
   sender?: string;
   groupId?: string;
   maxBytes: number;
+  configPath?: string;
 }): Promise<{ path: string; contentType?: string } | null> {
   const { attachment } = params;
   if (!attachment?.id) {
@@ -400,6 +429,33 @@ async function fetchAttachment(params: {
     throw new Error(
       `Signal attachment ${attachment.id} exceeds ${(params.maxBytes / (1024 * 1024)).toFixed(0)}MB limit`,
     );
+  }
+  const storedAttachmentPath = resolveSignalStoredAttachmentPath({
+    configPath: params.configPath,
+    attachment,
+  });
+  if (storedAttachmentPath) {
+    try {
+      const storedAttachmentStat = await stat(storedAttachmentPath);
+      if (storedAttachmentStat.isFile()) {
+        if (storedAttachmentStat.size > params.maxBytes) {
+          throw new Error(
+            `Signal attachment ${attachment.id} exceeds ${(params.maxBytes / (1024 * 1024)).toFixed(0)}MB limit`,
+          );
+        }
+        const buffer = await readFile(storedAttachmentPath);
+        const saved = await getSignalRuntime().channel.media.saveMediaBuffer(
+          buffer,
+          attachment.contentType ?? undefined,
+          "inbound",
+          params.maxBytes,
+          path.basename(storedAttachmentPath),
+        );
+        return { path: saved.path, contentType: saved.contentType };
+      }
+    } catch {
+      // Fall back to getAttachment when the local attachment store does not contain this file.
+    }
   }
   const rpcParams: Record<string, unknown> = {
     id: attachment.id,
@@ -762,11 +818,11 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const readReceiptsViaDaemon = Boolean(autoStart && sendReadReceipts);
   const daemonLifecycle = createSignalDaemonLifecycle({ abortSignal: opts.abortSignal });
   let daemonHandle: SignalDaemonHandle | null = null;
+  const configPathRaw = opts.configPath ?? accountInfo.config.configPath;
+  const configPath = configPathRaw?.trim() || undefined;
 
   if (autoStart) {
     const cliPath = opts.cliPath ?? accountInfo.config.cliPath ?? "signal-cli";
-    const configPathRaw = opts.configPath ?? accountInfo.config.configPath;
-    const configPath = configPathRaw?.trim() || undefined;
     const httpHost = opts.httpHost ?? accountInfo.config.httpHost ?? "127.0.0.1";
     const httpPort = opts.httpPort ?? accountInfo.config.httpPort ?? 8080;
     daemonHandle = spawnSignalDaemon({
@@ -831,7 +887,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       readReceiptsViaDaemon,
       injectLinkPreviews: accountInfo.config.injectLinkPreviews,
       preserveTextStyles: accountInfo.config.preserveTextStyles,
-      fetchAttachment,
+      fetchAttachment: (params) => fetchAttachment({ ...params, configPath }),
       deliverReplies: (params) => deliverReplies({ cfg, ...params, chunkMode }),
       resolveSignalReactionTargets,
       isSignalReactionMessage,

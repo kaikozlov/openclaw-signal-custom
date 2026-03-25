@@ -333,11 +333,11 @@ describe("signalPlugin outbound sendMedia", () => {
       expect(body.params).toEqual(
         expect.objectContaining({
           groupIds: ["group-1"],
-          recipients: ["123e4567-e89b-12d3-a456-426614174000"],
           targetAuthor: "123e4567-e89b-12d3-a456-426614174000",
           targetTimestamp: 1700000000456,
         }),
       );
+      expect(body.params.recipients).toBeUndefined();
     } finally {
       __clearSignalReactionTargetCacheForTests();
       global.fetch = originalFetch;

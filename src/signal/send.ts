@@ -158,7 +158,6 @@ export async function sendMessageSignal(
   });
   const target = parseTarget(to);
   let message = text ?? "";
-  let messageFromPlaceholder = false;
   let textStyles: SignalTextStyleRange[] = [];
   const textMode = opts.textMode ?? "markdown";
   const maxBytes = (() => {
@@ -190,14 +189,9 @@ export async function sendMessageSignal(
     );
     attachments = [saved.path];
     attachmentKind = media.kind;
-    if (!message && attachmentKind) {
-      // Avoid sending an empty body when only attachments exist.
-      message = attachmentKind === "image" ? "<media:image>" : `<media:${attachmentKind}>`;
-      messageFromPlaceholder = true;
-    }
   }
 
-  if (message.trim() && !messageFromPlaceholder) {
+  if (message.trim()) {
     if (textMode === "plain") {
       textStyles = opts.textStyles ?? [];
     } else {
@@ -211,8 +205,10 @@ export async function sendMessageSignal(
     }
   }
 
-  if (!message.trim() && (!attachments || attachments.length === 0)) {
-    throw new Error("Signal send requires text or media");
+  const quoteTimestamp = parseQuoteTimestamp(opts.replyTo);
+  const hasQuote = typeof quoteTimestamp === "number";
+  if (!message.trim() && (!attachments || attachments.length === 0) && !hasQuote) {
+    throw new Error("Signal send requires text, media, or a quoted reply target");
   }
 
   const params: Record<string, unknown> = { message };
@@ -257,7 +253,6 @@ export async function sendMessageSignal(
   }
   Object.assign(params, targetParams);
 
-  const quoteTimestamp = parseQuoteTimestamp(opts.replyTo);
   const quotedSender = quoteTimestamp
     ? resolveSignalReactionTarget({
         groupId: target.type === "group" ? target.groupId : undefined,

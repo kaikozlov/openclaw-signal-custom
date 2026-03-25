@@ -301,6 +301,138 @@ describe("signal monitor edge cases", () => {
     );
   });
 
+  it("uses a clean placeholder body for audio attachments instead of an envelope-shaped body", async () => {
+    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime();
+    const fetchAttachment = vi.fn(async () => ({
+      path: "/tmp/note.m4a",
+      contentType: "audio/aac",
+    }));
+    const handler = createHandler({ fetchAttachment });
+
+    await handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Kai",
+          timestamp: 1700000000000,
+          dataMessage: {
+            attachments: [{ id: "a1", contentType: "audio/aac" }],
+          },
+        },
+      }),
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+    expect(
+      (dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0] as {
+        ctx: { Body?: string; BodyForAgent?: string; BodyForCommands?: string };
+      }).ctx,
+    ).toEqual(
+      expect.objectContaining({
+        Body: "<media:audio>",
+        BodyForAgent: "<media:audio>",
+        BodyForCommands: "<media:audio>",
+      }),
+    );
+  });
+
+  it("starts attachment fetch before later mention-gating work", async () => {
+    let resolveAttachment: ((value: { path: string; contentType: string }) => void) | undefined;
+    const fetchAttachment = vi.fn(
+      () =>
+        new Promise<{ path: string; contentType: string }>((resolve) => {
+          resolveAttachment = resolve;
+        }),
+    );
+    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
+      buildMentionRegexes: () => {
+        expect(fetchAttachment).toHaveBeenCalledTimes(1);
+        resolveAttachment?.({ path: "/tmp/one.jpg", contentType: "image/jpeg" });
+        return [];
+      },
+    });
+    const handler = createHandler({ fetchAttachment });
+
+    await handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Kai",
+          timestamp: 1700000000000,
+          dataMessage: {
+            message: "hello",
+            attachments: [{ id: "a1", contentType: "image/jpeg" }],
+          },
+        },
+      }),
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+  });
+
+  it("does not block reply dispatch on read receipt completion", async () => {
+    const originalFetch = global.fetch;
+    let resolveFetch: ((value: Response) => void) | undefined;
+    const fetchMock = vi.fn<typeof fetch>(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+    global.fetch = fetchMock;
+    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime();
+    const handler = createHandler({
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15559990000",
+            httpUrl: "http://signal.local",
+          },
+        },
+        messages: {
+          inbound: {
+            debounceMs: 0,
+          },
+        },
+      } as never,
+      sendReadReceipts: true,
+    });
+
+    try {
+      const handlerPromise = handler({
+        event: "receive",
+        data: JSON.stringify({
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Kai",
+            timestamp: 1700000000000,
+            dataMessage: {
+              message: "hello",
+            },
+          },
+        }),
+      });
+
+      await vi.waitFor(() => {
+        expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+        expect(fetchMock).toHaveBeenCalledOnce();
+      });
+
+      resolveFetch?.({
+        status: 200,
+        ok: true,
+        statusText: "OK",
+        text: async () => JSON.stringify({ jsonrpc: "2.0", result: {} }),
+      } as Response);
+
+      await handlerPromise;
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
   it("authorizes control commands from explicitly allowed groups", async () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
       hasControlCommand: true,

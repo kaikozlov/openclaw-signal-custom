@@ -144,10 +144,8 @@ async function sendReactionSignalCore(params: {
     ...(params.remove ? { remove: true } : {}),
     ...(resolvedTargetAuthor ? { targetAuthor: resolvedTargetAuthor } : {}),
   };
-  const recipientTarget =
-    normalizedRecipient || (groupId ? targetAuthorParams.targetAuthor?.trim() : undefined);
-  if (recipientTarget) {
-    requestParams.recipients = [recipientTarget];
+  if (normalizedRecipient) {
+    requestParams.recipients = [normalizedRecipient];
   }
   if (groupId) {
     requestParams.groupIds = [groupId];

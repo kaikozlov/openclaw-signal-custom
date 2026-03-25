@@ -84,12 +84,12 @@ describe("signal reactions RPC", () => {
     };
     expect(body.params).toEqual(
       expect.objectContaining({
-        recipients: ["123e4567-e89b-12d3-a456-426614174000"],
         groupIds: ["group-id"],
         targetAuthor: "123e4567-e89b-12d3-a456-426614174000",
         remove: true,
       }),
     );
+    expect(body.params.recipients).toBeUndefined();
   });
 
   it("prefers targetAuthorUuid over targetAuthor when both are provided", async () => {
@@ -112,11 +112,11 @@ describe("signal reactions RPC", () => {
     };
     expect(body.params).toEqual(
       expect.objectContaining({
-        recipients: ["123e4567-e89b-12d3-a456-426614174000"],
         groupIds: ["group-id"],
         targetAuthor: "123e4567-e89b-12d3-a456-426614174000",
       }),
     );
+    expect(body.params.recipients).toBeUndefined();
   });
 
   it("throws for per-recipient sendReaction failures", async () => {
@@ -166,7 +166,7 @@ describe("signal reactions RPC", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("uses targetAuthor for group removals when recipient is empty", async () => {
+  it("does not synthesize recipients for group removals when recipient is empty", async () => {
     fetchMock.mockResolvedValueOnce(
       makeResponse({
         jsonrpc: "2.0",
@@ -185,11 +185,11 @@ describe("signal reactions RPC", () => {
     };
     expect(body.params).toEqual(
       expect.objectContaining({
-        recipients: ["+15551230000"],
         groupIds: ["group-id"],
         targetAuthor: "+15551230000",
         remove: true,
       }),
     );
+    expect(body.params.recipients).toBeUndefined();
   });
 });

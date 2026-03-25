@@ -90,7 +90,7 @@ export {
   recordPendingHistoryEntryIfEnabled,
 } from "openclaw/plugin-sdk/reply-history";
 export type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-export { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
+export { chunkText, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 export {
   resolvePayloadMediaUrls,
   resolveSendableOutboundReplyParts,
