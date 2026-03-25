@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   createChatChannelPlugin,
   collectStatusIssuesFromLastError,
@@ -326,20 +329,17 @@ const signalMessageActions: ChannelMessageActionAdapter = {
         throw new Error("Signal group management is disabled via actions.groupManagement.");
       }
       const groupId = readSignalGroupIdParam(ctx.params);
-      const avatar =
-        readStringParam(ctx.params, "avatar") ??
-        readStringParam(ctx.params, "path") ??
-        readStringParam(ctx.params, "file", {
-          required: true,
-          allowEmpty: false,
-          label: "avatar path",
-        });
-      await updateGroupSignal(
-        groupId,
-        { avatar: avatar.trim() },
-        { cfg: ctx.cfg, accountId: ctx.accountId ?? undefined },
-      );
-      return jsonResult({ ok: true, groupId, avatar: avatar.trim() });
+      const { avatarPath, cleanup } = await resolveSignalGroupIconSource(ctx.params);
+      try {
+        await updateGroupSignal(
+          groupId,
+          { avatar: avatarPath },
+          { cfg: ctx.cfg, accountId: ctx.accountId ?? undefined },
+        );
+      } finally {
+        await cleanup?.();
+      }
+      return jsonResult({ ok: true, groupId, avatar: avatarPath });
     }
     if (action === "addParticipant") {
       const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
@@ -373,12 +373,13 @@ const signalMessageActions: ChannelMessageActionAdapter = {
         throw new Error("Signal group management is disabled via actions.groupManagement.");
       }
       const groupId = readSignalGroupIdParam(ctx.params);
+      const role = readSignalAdminRoleParam(ctx.params);
       const member = readSignalParticipantParam(ctx.params, "role-add");
       await addGroupAdminSignal(groupId, member, {
         cfg: ctx.cfg,
         accountId: ctx.accountId ?? undefined,
       });
-      return jsonResult({ ok: true, promoted: member, groupId });
+      return jsonResult({ ok: true, promoted: member, groupId, role });
     }
     if (action === "role-remove") {
       const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
@@ -386,12 +387,13 @@ const signalMessageActions: ChannelMessageActionAdapter = {
         throw new Error("Signal group management is disabled via actions.groupManagement.");
       }
       const groupId = readSignalGroupIdParam(ctx.params);
+      const role = readSignalAdminRoleParam(ctx.params);
       const member = readSignalParticipantParam(ctx.params, "role-remove");
       await removeGroupAdminSignal(groupId, member, {
         cfg: ctx.cfg,
         accountId: ctx.accountId ?? undefined,
       });
-      return jsonResult({ ok: true, demoted: member, groupId });
+      return jsonResult({ ok: true, demoted: member, groupId, role });
     }
     if (action === "ban") {
       const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
@@ -520,7 +522,23 @@ const signalMessageActions: ChannelMessageActionAdapter = {
         cfg: ctx.cfg,
         accountId: ctx.accountId ?? undefined,
       });
-      return jsonResult({ ok: true, groupId, members });
+      const memberId =
+        readStringParam(ctx.params, "memberId") ??
+        readStringParam(ctx.params, "userId") ??
+        readStringParam(ctx.params, "participant") ??
+        readStringParam(ctx.params, "member") ??
+        readStringParam(ctx.params, "address");
+      if (!memberId?.trim()) {
+        return jsonResult({ ok: true, groupId, members });
+      }
+      const normalizedMemberId = stripSignalChannelPrefix(memberId.trim()).replace(/^uuid:/i, "").trim();
+      const member =
+        members.find((entry) => {
+          const number = typeof entry.number === "string" ? stripSignalChannelPrefix(entry.number).trim() : "";
+          const uuid = typeof entry.uuid === "string" ? stripSignalChannelPrefix(entry.uuid).replace(/^uuid:/i, "").trim() : "";
+          return number === normalizedMemberId || uuid === normalizedMemberId;
+        }) ?? null;
+      return jsonResult({ ok: true, groupId, memberId: normalizedMemberId, member });
     }
     if (action === "react") {
       const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
@@ -700,19 +718,25 @@ function readSignalRecipientParam(params: Record<string, unknown>): string {
 function readSignalGroupIdParam(params: Record<string, unknown>): string {
   const raw =
     readStringParam(params, "groupId") ??
+    readStringParam(params, "channelId") ??
+    readStringParam(params, "chatId") ??
+    readStringParam(params, "chatGuid") ??
+    readStringParam(params, "chatIdentifier") ??
     readStringParam(params, "to", {
       required: true,
-      label: "groupId (Signal group ID)",
+      label: "groupId/channelId (Signal group ID)",
     });
   const trimmed = raw.trim();
   if (!trimmed) {
     throw new Error("Signal group management requires groupId.");
   }
-  return stripSignalChannelPrefix(trimmed).replace(/^group:/i, "").trim();
+  return stripSignalChannelPrefix(trimmed).replace(/^(group|channel):/i, "").trim();
 }
 
 function readSignalParticipantParam(params: Record<string, unknown>, label: string): string {
   const value =
+    readStringParam(params, "userId") ??
+    readStringParam(params, "memberId") ??
     readStringParam(params, "participant") ??
     readStringParam(params, "member") ??
     readStringParam(params, "address");
@@ -745,6 +769,25 @@ function readSignalGroupPermissionParam(params: Record<string, unknown>): "every
       label: 'permission ("every-member" or "only-admins")',
     });
   return normalizeSignalGroupPermission(raw);
+}
+
+function normalizeSignalAdminRole(raw: string | undefined): "admin" {
+  if (!raw?.trim()) {
+    return "admin";
+  }
+  const value = raw.trim().toLowerCase();
+  if (["admin", "admins", "administrator", "administrators", "group-admin"].includes(value)) {
+    return "admin";
+  }
+  throw new Error('Signal only supports the "admin" group role.');
+}
+
+function readSignalAdminRoleParam(params: Record<string, unknown>): "admin" {
+  return normalizeSignalAdminRole(
+    readStringParam(params, "roleId") ??
+      readStringParam(params, "role") ??
+      readStringParam(params, "name"),
+  );
 }
 
 function normalizeSignalGroupLinkState(raw: string): "enabled" | "enabledWithApproval" | "disabled" {
@@ -798,6 +841,63 @@ function readSignalBooleanParam(
     }
   }
   throw new Error(`Signal ${label} requires a boolean value.`);
+}
+
+function extensionForSignalContentType(contentType?: string): string {
+  switch (contentType?.trim().toLowerCase()) {
+    case "image/jpeg":
+      return ".jpg";
+    case "image/webp":
+      return ".webp";
+    case "image/gif":
+      return ".gif";
+    case "image/heic":
+      return ".heic";
+    case "image/bmp":
+      return ".bmp";
+    case "image/svg+xml":
+      return ".svg";
+    case "image/png":
+    default:
+      return ".png";
+  }
+}
+
+async function resolveSignalGroupIconSource(params: Record<string, unknown>): Promise<{
+  avatarPath: string;
+  cleanup?: () => Promise<void>;
+}> {
+  const rawBuffer = readStringParam(params, "buffer", { trim: false });
+  if (rawBuffer) {
+    const filename =
+      readStringParam(params, "filename", { trim: false }) ??
+      readStringParam(params, "name", { trim: false }) ??
+      `group-icon${extensionForSignalContentType(readStringParam(params, "contentType") ?? readStringParam(params, "mimeType"))}`;
+    const safeName = path.basename(filename.trim() || "group-icon.png");
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-signal-group-icon-"));
+    const avatarPath = path.join(dir, safeName);
+    await writeFile(avatarPath, Buffer.from(rawBuffer, "base64"));
+    return {
+      avatarPath,
+      cleanup: async () => {
+        await rm(dir, { recursive: true, force: true });
+      },
+    };
+  }
+  const avatar =
+    readStringParam(params, "avatar") ??
+    readStringParam(params, "media", { trim: false }) ??
+    readStringParam(params, "path", { trim: false }) ??
+    readStringParam(params, "file", { trim: false }) ??
+    readStringParam(params, "filePath", { trim: false }) ??
+    readStringParam(params, "mediaUrl", { trim: false }) ??
+    readStringParam(params, "fileUrl", {
+      required: true,
+      allowEmpty: false,
+      trim: false,
+      label: "group icon media",
+    });
+  return { avatarPath: avatar.trim() };
 }
 
 function parseSignalMessageTimestamp(raw: string): number {

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { signalPlugin } from "./channel.js";
 import { setSignalRuntime } from "./runtime.js";
@@ -929,7 +930,7 @@ describe("signalPlugin outbound sendMedia", () => {
     {
       action: "channel-edit",
       params: {
-        groupId: "signal:group:group-1",
+        channelId: "signal:group:group-1",
         description: "  Ops Room  ",
       },
       expectedMethod: "updateGroup",
@@ -940,22 +941,9 @@ describe("signalPlugin outbound sendMedia", () => {
       expectedDetails: { ok: true, groupId: "group-1", description: "Ops Room" },
     },
     {
-      action: "setGroupIcon",
-      params: {
-        groupId: "signal:group:group-1",
-        avatar: "/tmp/group.png",
-      },
-      expectedMethod: "updateGroup",
-      expectedParams: {
-        groupId: "group-1",
-        avatar: "/tmp/group.png",
-      },
-      expectedDetails: { ok: true, groupId: "group-1", avatar: "/tmp/group.png" },
-    },
-    {
       action: "addParticipant",
       params: {
-        groupId: "signal:group:group-1",
+        chatId: "signal:group:group-1",
         participant: "signal:uuid:member-1",
       },
       expectedMethod: "updateGroup",
@@ -968,7 +956,7 @@ describe("signalPlugin outbound sendMedia", () => {
     {
       action: "removeParticipant",
       params: {
-        groupId: "signal:group:group-1",
+        chatGuid: "signal:group:group-1",
         member: "+15550002222",
       },
       expectedMethod: "updateGroup",
@@ -981,34 +969,36 @@ describe("signalPlugin outbound sendMedia", () => {
     {
       action: "role-add",
       params: {
-        groupId: "signal:group:group-1",
-        participant: "signal:+15550003333",
+        channelId: "signal:group:group-1",
+        userId: "signal:+15550003333",
+        roleId: "admin",
       },
       expectedMethod: "updateGroup",
       expectedParams: {
         groupId: "group-1",
         admin: ["+15550003333"],
       },
-      expectedDetails: { ok: true, promoted: "signal:+15550003333", groupId: "group-1" },
+      expectedDetails: { ok: true, promoted: "signal:+15550003333", groupId: "group-1", role: "admin" },
     },
     {
       action: "role-remove",
       params: {
-        groupId: "signal:group:group-1",
-        participant: "signal:uuid:admin-2",
+        channelId: "signal:group:group-1",
+        userId: "signal:uuid:admin-2",
+        roleId: "admin",
       },
       expectedMethod: "updateGroup",
       expectedParams: {
         groupId: "group-1",
         removeAdmin: ["admin-2"],
       },
-      expectedDetails: { ok: true, demoted: "signal:uuid:admin-2", groupId: "group-1" },
+      expectedDetails: { ok: true, demoted: "signal:uuid:admin-2", groupId: "group-1", role: "admin" },
     },
     {
       action: "ban",
       params: {
-        groupId: "signal:group:group-1",
-        participant: "+15550004444",
+        channelId: "signal:group:group-1",
+        userId: "+15550004444",
       },
       expectedMethod: "updateGroup",
       expectedParams: {
@@ -1020,8 +1010,8 @@ describe("signalPlugin outbound sendMedia", () => {
     {
       action: "ban",
       params: {
-        groupId: "signal:group:group-1",
-        participant: "signal:uuid:banned-1",
+        channelId: "signal:group:group-1",
+        userId: "signal:uuid:banned-1",
         unban: true,
       },
       expectedMethod: "updateGroup",
@@ -1034,7 +1024,7 @@ describe("signalPlugin outbound sendMedia", () => {
     {
       action: "channel-edit",
       params: {
-        groupId: "signal:group:group-1",
+        channelId: "signal:group:group-1",
         state: "enabled-with-approval",
       },
       expectedMethod: "updateGroup",
@@ -1047,7 +1037,7 @@ describe("signalPlugin outbound sendMedia", () => {
     {
       action: "channel-edit",
       params: {
-        groupId: "signal:group:group-1",
+        channelId: "signal:group:group-1",
         resetLink: true,
       },
       expectedMethod: "updateGroup",
@@ -1060,7 +1050,7 @@ describe("signalPlugin outbound sendMedia", () => {
     {
       action: "permissions",
       params: {
-        groupId: "signal:group:group-1",
+        channelId: "signal:group:group-1",
         setting: "add-member",
         permission: "only-admins",
       },
@@ -1074,7 +1064,7 @@ describe("signalPlugin outbound sendMedia", () => {
     {
       action: "permissions",
       params: {
-        groupId: "signal:group:group-1",
+        channelId: "signal:group:group-1",
         setting: "edit-details",
         permission: "every-member",
       },
@@ -1088,7 +1078,7 @@ describe("signalPlugin outbound sendMedia", () => {
     {
       action: "permissions",
       params: {
-        groupId: "signal:group:group-1",
+        channelId: "signal:group:group-1",
         setting: "send-messages",
         permission: "only-admins",
       },
@@ -1102,7 +1092,7 @@ describe("signalPlugin outbound sendMedia", () => {
     {
       action: "permissions",
       params: {
-        groupId: "signal:group:group-1",
+        channelId: "signal:group:group-1",
         enabled: true,
       },
       expectedMethod: "updateGroup",
@@ -1121,7 +1111,7 @@ describe("signalPlugin outbound sendMedia", () => {
     {
       action: "channel-edit",
       params: {
-        groupId: "signal:group:group-1",
+        channelId: "signal:group:group-1",
         seconds: 3600,
       },
       expectedMethod: "updateGroup",
@@ -1187,6 +1177,68 @@ describe("signalPlugin outbound sendMedia", () => {
     },
   );
 
+  it("handles setGroupIcon using hydrated runner buffer payload", async () => {
+    const handleAction = vi.fn(async (_ctx: unknown) => ({ content: [] }));
+    setSignalRuntime({
+      channel: {
+        signal: {
+          messageActions: {
+            handleAction,
+          },
+        },
+      },
+    } as never);
+
+    const originalFetch = global.fetch;
+    let avatarPathSeen = "";
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String((init as RequestInit).body)) as {
+        method: string;
+        params: Record<string, unknown>;
+      };
+      avatarPathSeen = String(body.params.avatar ?? "");
+      expect(body.method).toBe("updateGroup");
+      expect(body.params).toEqual(
+        expect.objectContaining({
+          groupId: "group-1",
+          avatar: expect.any(String),
+        }),
+      );
+      expect(existsSync(avatarPathSeen)).toBe(true);
+      return makeResponse({ jsonrpc: "2.0", result: null });
+    });
+    global.fetch = fetchMock;
+    try {
+      const result = await signalPlugin.actions?.handleAction?.({
+        channel: "signal-custom",
+        action: "setGroupIcon",
+        cfg: makeSignalCfg(),
+        params: {
+          channelId: "signal:group:group-1",
+          buffer: Buffer.from("fake-image").toString("base64"),
+          filename: "group.png",
+          contentType: "image/png",
+        },
+      } as never);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(handleAction).not.toHaveBeenCalled();
+      expect(avatarPathSeen.endsWith("group.png")).toBe(true);
+      expect(existsSync(avatarPathSeen)).toBe(false);
+      expect(result).toEqual(
+        expect.objectContaining({
+          details: expect.objectContaining({
+            ok: true,
+            groupId: "group-1",
+            avatar: avatarPathSeen,
+          }),
+        }),
+      );
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
   it("handles member-info locally without runtime messageActions.handleAction", async () => {
     const handleAction = vi.fn(async (_ctx: unknown) => ({ content: [] }));
     setSignalRuntime({
@@ -1219,7 +1271,8 @@ describe("signalPlugin outbound sendMedia", () => {
         action: "member-info",
         cfg: makeSignalCfg(),
         params: {
-          groupId: "signal:group:group-1",
+          channelId: "signal:group:group-1",
+          userId: "+15550002222",
         },
       } as never);
 
@@ -1236,7 +1289,8 @@ describe("signalPlugin outbound sendMedia", () => {
           details: expect.objectContaining({
             ok: true,
             groupId: "group-1",
-            members: [{ number: "+15550002222", name: "Alice" }],
+            memberId: "+15550002222",
+            member: { number: "+15550002222", name: "Alice" },
           }),
         }),
       );
@@ -1281,7 +1335,7 @@ describe("signalPlugin outbound sendMedia", () => {
         action: "channel-info",
         cfg: makeSignalCfg(),
         params: {
-          groupId: "signal:group:group-1",
+          channelId: "signal:group:group-1",
         },
       } as never);
 
