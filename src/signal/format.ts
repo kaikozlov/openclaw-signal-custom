@@ -278,6 +278,59 @@ function renderSignalText(ir: MarkdownIR): SignalFormattedText {
   };
 }
 
+function containsExplicitMarkdownSyntax(markdown: string): boolean {
+  return (
+    /(^|\n)\s{0,3}(#{1,6}\s|>\s|[-+*]\s|\d+\.\s|\|)/.test(markdown) ||
+    /```|`|\*\*|__|~~|\|\||\[[^\]]+\]\([^)]+\)/.test(markdown)
+  );
+}
+
+function looksLikeStructuredPlainText(markdown: string): boolean {
+  if (!markdown.includes("\n")) {
+    return false;
+  }
+  if (containsExplicitMarkdownSyntax(markdown)) {
+    return false;
+  }
+
+  const lines = markdown
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (lines.length < 3) {
+    return false;
+  }
+
+  let structuredLines = 0;
+  for (const line of lines) {
+    if (
+      /^[\p{Extended_Pictographic}\u200D\uFE0F]/u.test(line) ||
+      /^[A-Za-z][^.!?]{0,24}:\s/.test(line) ||
+      /^\/[a-z0-9_-]+/i.test(line) ||
+      line.includes(" · ")
+    ) {
+      structuredLines += 1;
+    }
+  }
+
+  return structuredLines / lines.length >= 0.6;
+}
+
+function preserveStructuredPlainText(markdown: string, limit: number): SignalFormattedText[] | null {
+  if (!looksLikeStructuredPlainText(markdown)) {
+    return null;
+  }
+
+  const text = markdown.trimEnd();
+  if (!text) {
+    return [];
+  }
+  if (limit <= 0 || text.length <= limit) {
+    return [{ text, styles: [] }];
+  }
+  return splitSignalFormattedText({ text, styles: [] }, limit);
+}
+
 function injectMentionMarkers(
   markdown: string,
   mentions: SourceMentionRange[],
@@ -408,6 +461,10 @@ export function markdownToSignalText(
   markdown: string,
   options: SignalMarkdownOptions = {},
 ): SignalFormattedText {
+  const preserved = preserveStructuredPlainText(markdown ?? "", Number.POSITIVE_INFINITY);
+  if (preserved) {
+    return preserved[0] ?? { text: "", styles: [] };
+  }
   const ir = markdownToIR(markdown ?? "", {
     linkify: true,
     enableSpoilers: true,
@@ -551,6 +608,10 @@ export function markdownToSignalTextChunks(
   limit: number,
   options: SignalMarkdownOptions = {},
 ): SignalFormattedText[] {
+  const preserved = preserveStructuredPlainText(markdown ?? "", limit);
+  if (preserved) {
+    return preserved;
+  }
   const ir = markdownToIR(markdown ?? "", {
     linkify: true,
     enableSpoilers: true,

@@ -99,4 +99,26 @@ describe("signal markdown formatting", () => {
     );
     expect(chunks.every((chunk) => chunk.styles.length === 0)).toBe(true);
   });
+
+  it("preserves literal newlines for structured plain-text status cards", () => {
+    const text = [
+      "🦞 OpenClaw 2026.3.24 (cff6dc9)",
+      "🧠 Model: zai/glm-5-turbo · 🔑 api-key",
+      "📚 Context: 126k/205k (62%) · 🧹 Compactions: 0",
+      "🧵 Session: agent:main:signal-custom:direct:+15550003333 · updated just now",
+      "⚙️ Runtime: direct · Think: low · 🪢 Queue: collect (depth 0)",
+    ].join("\n");
+
+    expect(markdownToSignalText(text, { tableMode: "off" })).toEqual({
+      text,
+      styles: [],
+    });
+  });
+
+  it("still collapses single-newline prose softbreaks", () => {
+    expect(markdownToSignalText("first line\nsecond line", { tableMode: "off" })).toEqual({
+      text: "first line second line",
+      styles: [],
+    });
+  });
 });

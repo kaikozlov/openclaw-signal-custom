@@ -426,6 +426,51 @@ describe("signal outbound cfg threading", () => {
     expect(result).toEqual({ channel: "signal-custom", messageId: "sig-6" });
   });
 
+  it("preserves structured plain-text newlines for status-like payloads", async () => {
+    const cfg = {
+      channels: {
+        "signal-custom": {
+          account: "+15559990000",
+          httpUrl: "http://signal.local",
+        },
+      },
+    };
+    const sendSignal = vi.fn(async () => ({ messageId: "sig-status" }));
+
+    const statusText = [
+      "🦞 OpenClaw 2026.3.24 (cff6dc9)",
+      "🧠 Model: zai/glm-5-turbo · 🔑 api-key",
+      "📚 Context: 126k/205k (62%) · 🧹 Compactions: 0",
+      "🧵 Session: agent:main:signal-custom:direct:+15550003333 · updated just now",
+      "⚙️ Runtime: direct · Think: low · 🪢 Queue: collect (depth 0)",
+    ].join("\n");
+
+    const sendPayload = signalPlugin.outbound!.sendPayload;
+    if (!sendPayload) {
+      throw new Error("signal outbound sendPayload is unavailable");
+    }
+
+    const result = await sendPayload({
+      cfg,
+      to: "+15550009999",
+      text: statusText,
+      payload: {
+        text: statusText,
+      },
+      deps: { sendSignal },
+    });
+
+    expect(sendSignal).toHaveBeenCalledWith(
+      "+15550009999",
+      statusText,
+      expect.objectContaining({
+        cfg,
+        textMode: "plain",
+      }),
+    );
+    expect(result).toEqual({ channel: "signal-custom", messageId: "sig-status" });
+  });
+
   it("formats markdown captions for media payloads when mentions are absent", async () => {
     const cfg = {
       channels: {
