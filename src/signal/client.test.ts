@@ -71,6 +71,7 @@ function createSocketEventServer() {
   });
 
   return {
+    connections,
     async listen() {
       await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
       const address = server.address();
@@ -192,6 +193,22 @@ describe("signal client typed errors and retry", () => {
     expect(result).toEqual({ timestamp: 1700000000002 });
     expect(socketRequest).toHaveBeenCalledTimes(1);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("closes ad-hoc socket clients after one-shot RPC requests", async () => {
+    socketEventServer = createSocketEventServer();
+    const port = await socketEventServer.listen();
+
+    const result = await signalRpcRequest("send", { message: "hi" }, {
+      baseUrl: "http://signal.local",
+      tcpHost: "127.0.0.1",
+      tcpPort: port,
+    });
+
+    expect(result).toBe(1);
+    await vi.waitFor(() => {
+      expect(socketEventServer?.connections).toHaveLength(0);
+    });
   });
 
   it("falls back to HTTP when socket request fails", async () => {

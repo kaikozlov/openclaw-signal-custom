@@ -218,6 +218,59 @@ describe("signalPlugin outbound sendMedia", () => {
     }
   });
 
+  it("falls back to matching contacts when group resolution receives Signal user inputs", async () => {
+    const originalFetch = global.fetch;
+    const fetchMock = vi.fn<typeof fetch>();
+    fetchMock
+      .mockResolvedValueOnce(
+        makeResponse({
+          jsonrpc: "2.0",
+          result: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeResponse({
+          jsonrpc: "2.0",
+          result: [
+            {
+              name: "Casey",
+              number: "+15550003333",
+              uuid: "123e4567-e89b-12d3-a456-426614174000",
+            },
+          ],
+        }),
+      );
+    global.fetch = fetchMock;
+    try {
+      const resolved = await signalPlugin.resolver?.resolveTargets({
+        cfg: makeSignalCfg(),
+        accountId: "default",
+        inputs: ["Casey", "+15550003333"],
+        kind: "group",
+        runtime: {} as never,
+      });
+
+      expect(resolved).toEqual([
+        {
+          input: "Casey",
+          resolved: true,
+          id: "+15550003333",
+          name: "Casey",
+          note: "matched Signal contact",
+        },
+        {
+          input: "+15550003333",
+          resolved: true,
+          id: "+15550003333",
+          name: "Casey",
+          note: "matched Signal contact",
+        },
+      ]);
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
   it("forwards mediaLocalRoots to sendMessageSignal", async () => {
     const sendSignal = vi.fn(async () => ({ messageId: "m1" }));
     const mediaLocalRoots = ["/tmp/workspace"];
@@ -999,8 +1052,8 @@ describe("signalPlugin outbound sendMedia", () => {
         jsonrpc: "2.0",
         result: {
           stickerPacks: [
-            { packId: "pack-alpha", title: "Alpha Pack", author: "Kai" },
-            { packId: "pack-beta", title: "Beta Pack", author: "Kai" },
+            { packId: "pack-alpha", title: "Alpha Pack", author: "Casey" },
+            { packId: "pack-beta", title: "Beta Pack", author: "Casey" },
           ],
         },
       }),
@@ -1027,7 +1080,7 @@ describe("signalPlugin outbound sendMedia", () => {
         expect.objectContaining({
           details: {
             ok: true,
-            packs: [{ packId: "pack-alpha", title: "Alpha Pack", author: "Kai" }],
+            packs: [{ packId: "pack-alpha", title: "Alpha Pack", author: "Casey" }],
           },
         }),
       );

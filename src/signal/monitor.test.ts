@@ -176,7 +176,7 @@ describe("signal monitor event handler", () => {
         data: JSON.stringify({
           envelope: {
             sourceNumber: "+15550001111",
-            sourceName: "Kai",
+            sourceName: "Casey",
             timestamp: 1700000000000,
             dataMessage: {
               message: "hello",
@@ -362,7 +362,7 @@ describe("signal monitor event handler", () => {
         data: JSON.stringify({
           envelope: {
             sourceNumber: "+15550001111",
-            sourceName: "Kai",
+            sourceName: "Casey",
             timestamp: 1700000000000,
             dataMessage: {
               message: "hello",
@@ -506,7 +506,7 @@ describe("signal monitor event handler", () => {
       data: JSON.stringify({
         envelope: {
           sourceNumber: "+15550001111",
-          sourceName: "Kai",
+          sourceName: "Casey",
           timestamp: 1700000000000,
           dataMessage: {
             message: "hello",
@@ -641,7 +641,7 @@ describe("signal monitor event handler", () => {
       data: JSON.stringify({
         envelope: {
           sourceNumber: "+15550001111",
-          sourceName: "Kai",
+          sourceName: "Casey",
           timestamp: 1700000000000,
           dataMessage: {
             message: "hello",
@@ -775,7 +775,7 @@ describe("signal monitor event handler", () => {
       data: JSON.stringify({
         envelope: {
           sourceNumber: "+15550001111",
-          sourceName: "Kai",
+          sourceName: "Casey",
           reactionMessage: {
             emoji: "✅",
             targetAuthor: "+15559990000",

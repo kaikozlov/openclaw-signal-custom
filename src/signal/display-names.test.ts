@@ -9,14 +9,14 @@ describe("signal display name resolution", () => {
   it("indexes contact names by normalized number and uuid", () => {
     const index = buildSignalDisplayNameIndex([
       {
-        name: "Kai",
+        name: "Casey",
         number: "1 (555) 000-1111",
         uuid: "550E8400-E29B-41D4-A716-446655440000",
       },
     ]);
 
-    expect(index.byNumber.get("+15550001111")).toBe("Kai");
-    expect(index.byUuid.get("550e8400-e29b-41d4-a716-446655440000")).toBe("Kai");
+    expect(index.byNumber.get("+15550001111")).toBe("Casey");
+    expect(index.byUuid.get("550e8400-e29b-41d4-a716-446655440000")).toBe("Casey");
   });
 
   it("prefers mention.name before consulting contacts", async () => {
@@ -42,7 +42,7 @@ describe("signal display name resolution", () => {
   it("resolves sender and mention names from cached contacts", async () => {
     const listContactsSpy = vi.spyOn(directory, "listSignalContacts").mockResolvedValue([
       {
-        name: "Kai",
+        name: "Casey",
         number: "+15550001111",
         uuid: "550e8400-e29b-41d4-a716-446655440000",
       },
@@ -59,14 +59,14 @@ describe("signal display name resolution", () => {
         e164: "+15550001111",
         uuid: "550e8400-e29b-41d4-a716-446655440000",
       }),
-    ).resolves.toBe("Kai");
+    ).resolves.toBe("Casey");
     await expect(
       resolver.resolveMentionDisplayName({
         uuid: "550e8400-e29b-41d4-a716-446655440000",
         start: 0,
         length: 1,
       }),
-    ).resolves.toBe("Kai");
+    ).resolves.toBe("Casey");
     expect(listContactsSpy).toHaveBeenCalledOnce();
   });
 });

@@ -1157,6 +1157,28 @@ function resolveSignalGroupTarget(params: {
   return { input: params.input, resolved: false, note: "no matching Signal group" };
 }
 
+function shouldFallbackSignalGroupResolveToContact(input: string): boolean {
+  const trimmed = stripSignalChannelPrefix(input).trim();
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith("group:")) {
+    return false;
+  }
+  if (/^uuid:/i.test(trimmed)) {
+    return true;
+  }
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)) {
+    return true;
+  }
+  if (/^\+[1-9]\d{6,15}$/.test(trimmed)) {
+    return true;
+  }
+  return Boolean(
+    lower &&
+      !/\s/.test(trimmed) &&
+      !trimmed.includes(":"),
+  );
+}
+
 const signalOutbound = {
   ...signalOutboundBase,
   sendPoll: async (ctx: { cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"]; to: string; poll: { question: string; options: string[]; maxSelections?: number | null }; accountId?: string | null }) => {
@@ -1300,7 +1322,34 @@ export const signalPlugin = createChatChannelPlugin<ResolvedSignalAccount, Signa
             },
             { detailed: false },
           );
-          return inputs.map((input) => resolveSignalGroupTarget({ groups, input }));
+          const groupResults = inputs.map((input) => resolveSignalGroupTarget({ groups, input }));
+          const fallbackInputs = groupResults.filter(
+            (result) =>
+              !result.resolved && shouldFallbackSignalGroupResolveToContact(result.input),
+          );
+          if (fallbackInputs.length === 0) {
+            return groupResults;
+          }
+          const contacts = await listSignalContacts({
+            cfg,
+            accountId: accountId ?? undefined,
+          });
+          return groupResults.map((result) => {
+            if (result.resolved || !shouldFallbackSignalGroupResolveToContact(result.input)) {
+              return result;
+            }
+            const contactResult = resolveSignalContactTarget({
+              contacts,
+              input: result.input,
+            });
+            if (!contactResult.resolved) {
+              return result;
+            }
+            return {
+              ...contactResult,
+              note: "matched Signal contact",
+            };
+          });
         }
         const contacts = await listSignalContacts({
           cfg,

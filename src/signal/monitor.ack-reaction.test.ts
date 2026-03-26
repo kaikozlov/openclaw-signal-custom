@@ -193,7 +193,7 @@ function createReceiveEvent(params?: {
       envelope: {
         sourceNumber: "+15550001111",
         sourceUuid: "sender-uuid-1",
-        sourceName: "Kai",
+        sourceName: "Casey",
         timestamp: envelopeTimestamp,
         dataMessage,
       },

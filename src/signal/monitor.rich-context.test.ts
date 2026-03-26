@@ -160,7 +160,7 @@ function makeReceiveEvent(dataMessage: Record<string, unknown>, envelope?: Recor
     data: JSON.stringify({
       envelope: {
         sourceNumber: "+15550001111",
-        sourceName: "Kai",
+        sourceName: "Casey",
         timestamp: 1700000000000,
         dataMessage,
         ...envelope,
@@ -299,7 +299,7 @@ describe("signal monitor rich inbound context", () => {
   it("uses resolved contact names for sender fallback and mention expansion", async () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime();
     const handler = createHandler({
-      resolveSenderDisplayName: async () => "Kai",
+      resolveSenderDisplayName: async () => "Casey",
       resolveMentionDisplayName: async () => "Morgan",
     });
 
@@ -324,7 +324,7 @@ describe("signal monitor rich inbound context", () => {
     });
 
     const ctx = capturedCtx(dispatchReplyWithBufferedBlockDispatcher);
-    expect(ctx?.SenderName).toBe("Kai");
+    expect(ctx?.SenderName).toBe("Casey");
     expect(ctx?.SenderId).toBe("+15550001111");
     expect(ctx?.BodyForCommands).toBe("@Morgan says hi");
   });
@@ -442,7 +442,7 @@ describe("signal monitor rich inbound context", () => {
       data: JSON.stringify({
         envelope: {
           sourceNumber: "+15550001111",
-          sourceName: "Kai",
+          sourceName: "Casey",
           timestamp: 1700000000999,
           editMessage: {
             targetSentTimestamp: 1700000000111,
@@ -562,7 +562,7 @@ describe("signal monitor rich inbound context", () => {
       data: JSON.stringify({
         envelope: {
           sourceNumber: "+15550001111",
-          sourceName: "Kai",
+          sourceName: "Casey",
           timestamp: 1700000002222,
           storyMessage: {
             allowsReplies: true,

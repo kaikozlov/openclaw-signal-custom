@@ -211,7 +211,7 @@ describe("signal monitor edge cases", () => {
       data: JSON.stringify({
         envelope: {
           sourceNumber: "+15550001111",
-          sourceName: "Kai",
+          sourceName: "Casey",
           syncMessage: null,
           dataMessage: {
             message: "group hello",
@@ -244,7 +244,7 @@ describe("signal monitor edge cases", () => {
       data: JSON.stringify({
         envelope: {
           sourceNumber: "+15550001111",
-          sourceName: "Kai",
+          sourceName: "Casey",
           timestamp: 1700000000000,
           dataMessage: {
             message: "hello",
@@ -267,7 +267,7 @@ describe("signal monitor edge cases", () => {
       data: JSON.stringify({
         envelope: {
           sourceNumber: "+15550001111",
-          sourceName: "Kai",
+          sourceName: "Casey",
           syncMessage: { sentMessage: { destination: "+15550003333" } },
           dataMessage: {
             message: "group hello",
@@ -297,7 +297,7 @@ describe("signal monitor edge cases", () => {
       data: JSON.stringify({
         envelope: {
           sourceNumber: "+15550001111",
-          sourceName: "Kai",
+          sourceName: "Casey",
           timestamp: 1700000000000,
           dataMessage: {
             attachments: [
@@ -345,7 +345,7 @@ describe("signal monitor edge cases", () => {
       data: JSON.stringify({
         envelope: {
           sourceNumber: "+15550001111",
-          sourceName: "Kai",
+          sourceName: "Casey",
           timestamp: 1700000000000,
           dataMessage: {
             attachments: [{ id: "a1", contentType: "audio/aac" }],
@@ -390,7 +390,7 @@ describe("signal monitor edge cases", () => {
       data: JSON.stringify({
         envelope: {
           sourceNumber: "+15550001111",
-          sourceName: "Kai",
+          sourceName: "Casey",
           timestamp: 1700000000000,
           dataMessage: {
             message: "hello",
@@ -437,7 +437,7 @@ describe("signal monitor edge cases", () => {
         data: JSON.stringify({
           envelope: {
             sourceNumber: "+15550001111",
-            sourceName: "Kai",
+            sourceName: "Casey",
             timestamp: 1700000000000,
             dataMessage: {
               message: "hello",
@@ -483,7 +483,7 @@ describe("signal monitor edge cases", () => {
       data: JSON.stringify({
         envelope: {
           sourceNumber: "+15550001111",
-          sourceName: "Kai",
+          sourceName: "Casey",
           timestamp: 1700000000000,
           dataMessage: {
             message: "/status",
@@ -512,7 +512,7 @@ describe("signal monitor edge cases", () => {
       data: JSON.stringify({
         envelope: {
           sourceNumber: "+15550001111",
-          sourceName: "Kai",
+          sourceName: "Casey",
           timestamp: 1700000000000,
           dataMessage: {
             message: `hello \uFFFC`,
@@ -546,7 +546,7 @@ describe("signal monitor edge cases", () => {
       data: JSON.stringify({
         envelope: {
           sourceNumber: "+15550001111",
-          sourceName: "Kai",
+          sourceName: "Casey",
           timestamp: 1700000000000,
           dataMessage: {
             message: "I agree",
