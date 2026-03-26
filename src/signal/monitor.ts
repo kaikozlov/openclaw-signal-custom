@@ -20,6 +20,7 @@ import {
   resolveSignalSender,
   type SignalSender,
 } from "./identity.js";
+import { createSignalDisplayNameResolver } from "./display-names.js";
 import {
   detectSignalApiMode,
   pollSignalJsonRpc,
@@ -820,6 +821,10 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   let daemonHandle: SignalDaemonHandle | null = null;
   const configPathRaw = opts.configPath ?? accountInfo.config.configPath;
   const configPath = configPathRaw?.trim() || undefined;
+  const displayNameResolver = createSignalDisplayNameResolver({
+    cfg,
+    accountId: accountInfo.accountId,
+  });
 
   if (autoStart) {
     const cliPath = opts.cliPath ?? accountInfo.config.cliPath ?? "signal-cli";
@@ -893,6 +898,8 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       isSignalReactionMessage,
       shouldEmitSignalReactionNotification,
       buildSignalReactionSystemEventText,
+      resolveMentionDisplayName: displayNameResolver.resolveMentionDisplayName,
+      resolveSenderDisplayName: displayNameResolver.resolveSenderDisplayName,
     });
 
     await runSignalReceiveLoop({

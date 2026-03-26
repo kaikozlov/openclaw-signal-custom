@@ -31,10 +31,13 @@ export type SignalMentionRenderResult = {
   offsetShifts: Map<number, number>;
 };
 
-export function renderSignalMentions(
+export async function renderSignalMentions(
   message: string,
   mentions?: SignalMention[] | null,
-): SignalMentionRenderResult {
+  options?: {
+    resolveMentionLabel?: (mention: SignalMention) => Promise<string | undefined> | string | undefined;
+  },
+): Promise<SignalMentionRenderResult> {
   if (!message || !mentions?.length) {
     return { text: message, offsetShifts: new Map() };
   }
@@ -48,7 +51,10 @@ export function renderSignalMentions(
 
   for (const mention of candidates) {
     const identifier = mention.uuid ?? mention.number;
-    if (!identifier) {
+    const resolvedLabel = await options?.resolveMentionLabel?.(mention);
+    const replacementLabel =
+      typeof resolvedLabel === "string" && resolvedLabel.trim() ? resolvedLabel.trim() : identifier;
+    if (!replacementLabel) {
       continue;
     }
 
@@ -62,7 +68,7 @@ export function renderSignalMentions(
       continue;
     }
 
-    const replacement = `@${identifier}`;
+    const replacement = `@${replacementLabel}`;
     const shift = replacement.length - (end - start);
     normalized = normalized.slice(0, start) + replacement + normalized.slice(end);
     if (shift !== 0) {

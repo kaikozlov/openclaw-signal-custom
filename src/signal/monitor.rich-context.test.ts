@@ -296,6 +296,39 @@ describe("signal monitor rich inbound context", () => {
     );
   });
 
+  it("uses resolved contact names for sender fallback and mention expansion", async () => {
+    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime();
+    const handler = createHandler({
+      resolveSenderDisplayName: async () => "Kai",
+      resolveMentionDisplayName: async () => "Morgan",
+    });
+
+    await handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          timestamp: 1700000000000,
+          dataMessage: {
+            message: "\uFFFC says hi",
+            mentions: [
+              {
+                uuid: "550e8400-e29b-41d4-a716-446655440000",
+                start: 0,
+                length: 1,
+              },
+            ],
+          },
+        },
+      }),
+    });
+
+    const ctx = capturedCtx(dispatchReplyWithBufferedBlockDispatcher);
+    expect(ctx?.SenderName).toBe("Kai");
+    expect(ctx?.SenderId).toBe("+15550001111");
+    expect(ctx?.BodyForCommands).toBe("@Morgan says hi");
+  });
+
   it("captures sticker placeholders, media, and metadata", async () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime();
     const fetchAttachment = vi.fn(async () => ({

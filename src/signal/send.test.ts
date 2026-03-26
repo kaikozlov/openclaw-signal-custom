@@ -196,7 +196,7 @@ describe("sendMessageSignal", () => {
     );
   });
 
-  it("collapses markdown softbreaks in prose to spaces", async () => {
+  it("preserves single-newline markdown line breaks faithfully", async () => {
     fetchMock.mockResolvedValueOnce(
       makeResponse({
         text: JSON.stringify({
@@ -223,7 +223,7 @@ describe("sendMessageSignal", () => {
     expect(body.params).toEqual(
       expect.objectContaining({
         account: "+15559990000",
-        message: "first line second line",
+        message: "first line\nsecond line",
         recipient: ["+15550006666"],
       }),
     );

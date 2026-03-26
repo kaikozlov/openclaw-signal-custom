@@ -244,4 +244,6 @@ export type SignalEventHandlerDeps = {
     targetLabel?: string;
     groupLabel?: string;
   }) => string;
+  resolveMentionDisplayName?: (mention: SignalMention) => Promise<string | undefined>;
+  resolveSenderDisplayName?: (sender: SignalSender) => Promise<string | undefined>;
 };

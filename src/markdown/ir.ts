@@ -19,6 +19,7 @@ type RenderEnv = {
 type MarkdownToken = {
   type: string;
   content?: string;
+  info?: string;
   children?: MarkdownToken[];
   attrs?: [string, string][];
   attrGet?: (name: string) => string | null;
@@ -301,8 +302,24 @@ function renderInlineCode(state: RenderState, content: string) {
   target.styles.push({ start, end: start + content.length, style: "code" });
 }
 
-function renderCodeBlock(state: RenderState, content: string) {
+function normalizeFenceLanguage(info?: string): string | undefined {
+  if (typeof info !== "string") {
+    return undefined;
+  }
+  const trimmed = info.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const language = trimmed.split(/\s+/, 1)[0]?.trim();
+  return language || undefined;
+}
+
+function renderCodeBlock(state: RenderState, content: string, info?: string) {
   let code = content ?? "";
+  const language = normalizeFenceLanguage(info);
+  if (language) {
+    appendText(state, `[${language}]\n`);
+  }
   if (!code.endsWith("\n")) {
     code = `${code}\n`;
   }
@@ -628,7 +645,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         appendText(state, token.content ?? "");
         break;
       case "softbreak":
-        appendText(state, " ");
+        appendText(state, "\n");
         break;
       case "hardbreak":
         appendText(state, "\n");
@@ -692,7 +709,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         break;
       case "code_block":
       case "fence":
-        renderCodeBlock(state, token.content ?? "");
+        renderCodeBlock(state, token.content ?? "", token.info);
         break;
       case "html_block":
       case "html_inline":

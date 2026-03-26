@@ -426,7 +426,7 @@ describe("signal outbound cfg threading", () => {
     expect(result).toEqual({ channel: "signal-custom", messageId: "sig-6" });
   });
 
-  it("preserves structured plain-text newlines for status-like payloads", async () => {
+  it("preserves literal newlines for plain-text payloads", async () => {
     const cfg = {
       channels: {
         "signal-custom": {

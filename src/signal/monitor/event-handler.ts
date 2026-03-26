@@ -116,6 +116,14 @@ function normalizeCaptionValue(value?: string | null): string | undefined {
   return normalized || undefined;
 }
 
+function normalizeSenderNameValue(value?: string | null): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim();
+  return normalized || undefined;
+}
+
 function resolveSignalMediaKind(mime?: string | null): string | undefined {
   if (!mime) {
     return undefined;
@@ -1353,8 +1361,16 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         ? dataMessage?.reaction
         : null;
 
+    const senderDisplay = formatSignalSenderDisplay(sender);
+    const senderName =
+      normalizeSenderNameValue(envelope.sourceName) ??
+      (await deps.resolveSenderDisplayName?.(sender)) ??
+      senderDisplay;
+
     const rawMessage = dataMessage?.message ?? "";
-    const mentionResult = renderSignalMentions(rawMessage, dataMessage?.mentions);
+    const mentionResult = await renderSignalMentions(rawMessage, dataMessage?.mentions, {
+      resolveMentionLabel: deps.resolveMentionDisplayName,
+    });
     const normalizedMessage = mentionResult.text;
     const adjustedTextStyles =
       dataMessage?.textStyles && mentionResult.offsetShifts.size > 0
@@ -1454,7 +1470,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const bareReaction = dataMessage?.reaction;
     const hasBareReactionField = !reaction && Boolean(bareReaction) && !messageText && !quoteText;
     if (hasBareReactionField && bareReaction) {
-      const senderDisplayBare = formatSignalSenderDisplay(sender);
+      const senderDisplayBare = senderDisplay;
       const emojiLabel =
         typeof bareReaction.emoji === "string" ? bareReaction.emoji.trim() || "emoji" : "emoji";
       const isRemove = bareReaction.isRemove === true || bareReaction.remove === true;
@@ -1484,7 +1500,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           logVerbose(`signal: bare reaction suppressed (reactionMode=${deps.reactionMode})`);
           return;
         }
-        const senderName = envelope.sourceName ?? senderDisplayBare;
         const senderPeerIdBare = resolveSignalPeerId(sender);
         const routeBare = pluginRuntime.channel.routing.resolveAgentRoute({
           cfg: deps.cfg,
@@ -1522,9 +1537,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }
       return;
     }
-
     const hasBodyContent = Boolean(messageText || quoteText) || Boolean(!reaction && allAttachments.length > 0);
-    const senderDisplay = formatSignalSenderDisplay(sender);
 
     if (
       reaction &&
@@ -1551,8 +1564,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       if (!senderRecipient) {
         return;
       }
-      const senderDisplay = formatSignalSenderDisplay(sender);
-      const senderName = envelope.sourceName ?? senderDisplay;
       const groupId = storyMessage.groupId?.trim() || undefined;
       const isGroup = Boolean(groupId);
       const mediaAttachment = storyMessage.fileAttachment ?? undefined;
@@ -1674,7 +1685,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         senderId: senderAllowId,
         senderIdLine,
         senderDisplay,
-        senderName: envelope.sourceName ?? undefined,
+        senderName,
         accountId: deps.accountId,
         sendPairingReply: async (text) => {
           await sendMessageSignal(`${SIGNAL_CHANNEL_ID}:${senderRecipient}`, text, {
@@ -1846,7 +1857,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         historyKey,
         limit: deps.historyLimit,
         entry: {
-          sender: envelope.sourceName ?? senderDisplay,
+          sender: senderName,
           body: pendingBodyText,
           timestamp: envelope.timestamp ?? undefined,
           messageId:
@@ -1951,7 +1962,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       logVerbose(`signal read receipt skipped (missing timestamp) for ${senderDisplay}`);
     }
 
-    const senderName = envelope.sourceName ?? senderDisplay;
     const messageId =
       typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined;
     const attachmentContext = buildSignalAttachmentDetailContext({

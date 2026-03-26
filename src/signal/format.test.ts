@@ -66,7 +66,13 @@ describe("signal markdown formatting", () => {
 
   it("keeps fenced code blocks separated without extra blank lines", () => {
     expect(markdownToSignalText("```js\nconst x = 1;\n```\nnext", { tableMode: "off" }).text).toBe(
-      "const x = 1;\n\nnext",
+      "[js]\nconst x = 1;\n\nnext",
+    );
+  });
+
+  it("renders horizontal rules as a soft plain-text separator", () => {
+    expect(markdownToSignalText("alpha\n\n---\n\nbeta", { tableMode: "off" }).text).toBe(
+      "alpha\n\n───\n\nbeta",
     );
   });
 
@@ -100,7 +106,7 @@ describe("signal markdown formatting", () => {
     expect(chunks.every((chunk) => chunk.styles.length === 0)).toBe(true);
   });
 
-  it("preserves literal newlines for structured plain-text status cards", () => {
+  it("preserves literal newlines for plain text with no markdown syntax", () => {
     const text = [
       "🦞 OpenClaw 2026.3.24 (cff6dc9)",
       "🧠 Model: zai/glm-5-turbo · 🔑 api-key",
@@ -115,9 +121,22 @@ describe("signal markdown formatting", () => {
     });
   });
 
-  it("still collapses single-newline prose softbreaks", () => {
+  it("preserves single-newline prose line breaks faithfully", () => {
     expect(markdownToSignalText("first line\nsecond line", { tableMode: "off" })).toEqual({
-      text: "first line second line",
+      text: "first line\nsecond line",
+      styles: [],
+    });
+  });
+
+  it("preserves multiline prose without rewriting it", () => {
+    expect(
+      markdownToSignalText(
+        "This is a long sentence that should not be preserved as a status card.\nthis continues the same thought.\nAnd this line finishes it.",
+        { tableMode: "off" },
+      ),
+    ).toEqual({
+      text:
+        "This is a long sentence that should not be preserved as a status card.\nthis continues the same thought.\nAnd this line finishes it.",
       styles: [],
     });
   });
