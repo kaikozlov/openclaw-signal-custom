@@ -38,6 +38,186 @@ describe("signalPlugin outbound sendMedia", () => {
     expect(signalPlugin.mentions?.stripPatterns?.({} as never)).toEqual(["\uFFFC"]);
   });
 
+  it("formats signal daemon version in capabilities probe output", () => {
+    expect(
+      signalPlugin.status?.formatCapabilitiesProbe?.({
+        probe: { version: "0.13.17" },
+      } as never),
+    ).toEqual([{ text: "Signal daemon: 0.13.17" }]);
+    expect(
+      signalPlugin.status?.formatCapabilitiesProbe?.({
+        probe: { ok: true },
+      } as never),
+    ).toEqual([]);
+  });
+
+  it("resolves allowlist entries to signal contact names", async () => {
+    const originalFetch = global.fetch;
+    const fetchMock = vi.fn<typeof fetch>();
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        jsonrpc: "2.0",
+        result: [
+          {
+            name: "Alice",
+            number: "+15551234567",
+            uuid: "123E4567-E89B-12D3-A456-426614174000",
+          },
+        ],
+      }),
+    );
+    global.fetch = fetchMock;
+    try {
+      const resolved = await signalPlugin.allowlist?.resolveNames?.({
+        cfg: makeSignalCfg(),
+        accountId: "default",
+        scope: "dm",
+        entries: ["+15551234567", "uuid:123e4567-e89b-12d3-a456-426614174000", "+15550009999"],
+      });
+
+      expect(resolved).toEqual([
+        { input: "+15551234567", resolved: true, name: "Alice" },
+        {
+          input: "uuid:123e4567-e89b-12d3-a456-426614174000",
+          resolved: true,
+          name: "Alice",
+        },
+        { input: "+15550009999", resolved: false },
+      ]);
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it("inspects signal account state through the plugin config adapter", () => {
+    const inspected = signalPlugin.config.inspectAccount?.(
+      {
+        channels: {
+          "signal-custom": {
+            account: "+15550001111",
+            configPath: "/tmp/signal-cli",
+            accounts: {
+              Work: {
+                account: "+15550002222",
+                tcpHost: "127.0.0.1",
+                tcpPort: 7583,
+              },
+            },
+          },
+        },
+      } as never,
+      "work",
+    );
+
+    expect(inspected).toEqual(
+      expect.objectContaining({
+        accountId: "work",
+        enabled: true,
+        configured: true,
+        accountNumber: "+15550002222",
+        baseUrl: "http://127.0.0.1:8080",
+        connectionMode: "tcp",
+      }),
+    );
+  });
+
+  it("resolves user targets from signal contacts", async () => {
+    const originalFetch = global.fetch;
+    const fetchMock = vi.fn<typeof fetch>();
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        jsonrpc: "2.0",
+        result: [
+          {
+            name: "Alice Example",
+            number: "+15551234567",
+            uuid: "123e4567-e89b-12d3-a456-426614174000",
+          },
+        ],
+      }),
+    );
+    global.fetch = fetchMock;
+    try {
+      const resolved = await signalPlugin.resolver?.resolveTargets({
+        cfg: makeSignalCfg(),
+        accountId: "default",
+        inputs: ["Alice Example", "uuid:123e4567-e89b-12d3-a456-426614174000", "+15550009999"],
+        kind: "user",
+        runtime: {} as never,
+      });
+
+      expect(resolved).toEqual([
+        {
+          input: "Alice Example",
+          resolved: true,
+          id: "+15551234567",
+          name: "Alice Example",
+        },
+        {
+          input: "uuid:123e4567-e89b-12d3-a456-426614174000",
+          resolved: true,
+          id: "+15551234567",
+          name: "Alice Example",
+        },
+        {
+          input: "+15550009999",
+          resolved: false,
+          note: "no matching Signal contact",
+        },
+      ]);
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it("resolves group targets from signal groups", async () => {
+    const originalFetch = global.fetch;
+    const fetchMock = vi.fn<typeof fetch>();
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        jsonrpc: "2.0",
+        result: [
+          {
+            id: "group-123",
+            name: "Work Group",
+          },
+        ],
+      }),
+    );
+    global.fetch = fetchMock;
+    try {
+      const resolved = await signalPlugin.resolver?.resolveTargets({
+        cfg: makeSignalCfg(),
+        accountId: "default",
+        inputs: ["Work Group", "group:group-123", "missing group"],
+        kind: "group",
+        runtime: {} as never,
+      });
+
+      expect(resolved).toEqual([
+        {
+          input: "Work Group",
+          resolved: true,
+          id: "group:group-123",
+          name: "Work Group",
+        },
+        {
+          input: "group:group-123",
+          resolved: true,
+          id: "group:group-123",
+          name: "Work Group",
+        },
+        {
+          input: "missing group",
+          resolved: false,
+          note: "no matching Signal group",
+        },
+      ]);
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
   it("forwards mediaLocalRoots to sendMessageSignal", async () => {
     const sendSignal = vi.fn(async () => ({ messageId: "m1" }));
     const mediaLocalRoots = ["/tmp/workspace"];

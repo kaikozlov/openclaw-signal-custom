@@ -30,6 +30,73 @@ import {
 import { SIGNAL_CHANNEL_ID, SIGNAL_META } from "./constants.js";
 import { monitorSignalProvider } from "./signal/monitor.js";
 import { probeSignal, type SignalProbe } from "./signal/probe.js";
+import { listSignalContacts, type SignalContact } from "./signal/directory.js";
+import { inspectSignalAccount } from "./signal/account-inspect.js";
+import { signalCustomSetupWizard } from "./setup-wizard.js";
+
+function normalizeSignalAllowlistLookupKey(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const withoutPrefix = trimmed.replace(/^signal(-custom)?:/i, "").trim();
+  if (!withoutPrefix) {
+    return "";
+  }
+  if (withoutPrefix === "*") {
+    return "*";
+  }
+  if (withoutPrefix.toLowerCase().startsWith("uuid:")) {
+    const uuid = withoutPrefix.slice("uuid:".length).trim().toLowerCase();
+    return uuid ? `uuid:${uuid}` : "";
+  }
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(withoutPrefix)) {
+    return `uuid:${withoutPrefix.toLowerCase()}`;
+  }
+  return normalizeE164(withoutPrefix);
+}
+
+function buildSignalAllowlistContactNameMap(contacts: SignalContact[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const contact of contacts) {
+    const name = typeof contact.name === "string" ? contact.name.trim() : "";
+    if (!name) {
+      continue;
+    }
+    const number =
+      typeof contact.number === "string" ? normalizeSignalAllowlistLookupKey(contact.number) : "";
+    const uuid =
+      typeof contact.uuid === "string" ? normalizeSignalAllowlistLookupKey(`uuid:${contact.uuid}`) : "";
+    if (number) {
+      map.set(number, name);
+    }
+    if (uuid) {
+      map.set(uuid, name);
+    }
+  }
+  return map;
+}
+
+async function resolveSignalAllowlistNames(params: {
+  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
+  accountId?: string | null;
+  entries: string[];
+}) {
+  const contacts = await listSignalContacts({
+    cfg: params.cfg,
+    accountId: params.accountId ?? undefined,
+  });
+  const byKey = buildSignalAllowlistContactNameMap(contacts);
+  return params.entries.map((input) => {
+    const key = normalizeSignalAllowlistLookupKey(input);
+    const name = key ? byKey.get(key) : undefined;
+    return {
+      input,
+      resolved: Boolean(name),
+      ...(name ? { name } : {}),
+    };
+  });
+}
 
 function buildSignalSetupPatch(input: {
   signalNumber?: string;
@@ -51,6 +118,7 @@ export const signalCustomConfigAdapter = createScopedChannelConfigAdapter<Resolv
   sectionKey: SIGNAL_CHANNEL_ID,
   listAccountIds: listSignalAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveSignalAccount),
+  inspectAccount: adaptScopedAccountAccessor(inspectSignalAccount),
   defaultAccountId: resolveDefaultSignalAccountId,
   clearBaseFields: [
     "account",
@@ -72,16 +140,22 @@ export const signalCustomConfigAdapter = createScopedChannelConfigAdapter<Resolv
   allowTopLevel: true,
 });
 
-export const signalCustomAllowlistAdapter = buildDmGroupAccountAllowlistAdapter({
-  channelId: SIGNAL_CHANNEL_ID,
-  resolveAccount: resolveSignalAccount,
-  normalize: ({ cfg, accountId, values }) =>
-    signalCustomConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
-  resolveDmAllowFrom: (account: ResolvedSignalAccount) => account.config.allowFrom,
-  resolveGroupAllowFrom: (account: ResolvedSignalAccount) => account.config.groupAllowFrom,
-  resolveDmPolicy: (account: ResolvedSignalAccount) => account.config.dmPolicy,
-  resolveGroupPolicy: (account: ResolvedSignalAccount) => account.config.groupPolicy,
-});
+export const signalCustomAllowlistAdapter: NonNullable<
+  ChannelPlugin<ResolvedSignalAccount>["allowlist"]
+> = {
+  ...buildDmGroupAccountAllowlistAdapter({
+    channelId: SIGNAL_CHANNEL_ID,
+    resolveAccount: resolveSignalAccount,
+    normalize: ({ cfg, accountId, values }) =>
+      signalCustomConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
+    resolveDmAllowFrom: (account: ResolvedSignalAccount) => account.config.allowFrom,
+    resolveGroupAllowFrom: (account: ResolvedSignalAccount) => account.config.groupAllowFrom,
+    resolveDmPolicy: (account: ResolvedSignalAccount) => account.config.dmPolicy,
+    resolveGroupPolicy: (account: ResolvedSignalAccount) => account.config.groupPolicy,
+  }),
+  resolveNames: async ({ cfg, accountId, entries }) =>
+    await resolveSignalAllowlistNames({ cfg, accountId, entries }),
+};
 
 export const signalSetupAdapter: NonNullable<ChannelPlugin<ResolvedSignalAccount>["setup"]> = {
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
@@ -165,6 +239,8 @@ export const signalCustomStatusAdapter = createComputedAccountStatusAdapter<
     lastProbeAt: snapshot.lastProbeAt ?? null,
   }),
   probeAccount: async ({ account, timeoutMs }) => await probeSignal(account.baseUrl, timeoutMs),
+  formatCapabilitiesProbe: ({ probe }) =>
+    probe?.version ? [{ text: `Signal daemon: ${probe.version}` }] : [],
   resolveAccountSnapshot: ({ account }) => ({
     accountId: account.accountId,
     name: account.name,
@@ -234,6 +310,7 @@ export function createSignalCustomPluginBase(): Pick<
   ChannelPlugin<ResolvedSignalAccount, SignalProbe>,
   | "id"
   | "meta"
+  | "setupWizard"
   | "capabilities"
   | "streaming"
   | "reload"
@@ -249,6 +326,7 @@ export function createSignalCustomPluginBase(): Pick<
     ...createChannelPluginBase({
       id: SIGNAL_CHANNEL_ID,
       meta: SIGNAL_META,
+      setupWizard: signalCustomSetupWizard,
       capabilities: {
         chatTypes: ["direct", "group"],
         polls: true,
@@ -285,6 +363,7 @@ export function createSignalCustomPluginBase(): Pick<
     ChannelPlugin<ResolvedSignalAccount, SignalProbe>,
     | "id"
     | "meta"
+    | "setupWizard"
     | "capabilities"
     | "streaming"
     | "reload"

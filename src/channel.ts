@@ -1037,6 +1037,126 @@ function normalizeDirectoryGroupId(raw: string): string {
   return raw.replace(/^group:/i, "").trim();
 }
 
+function normalizeSignalResolverInput(raw: string): {
+  raw: string;
+  lower: string;
+  e164: string;
+  uuid: string;
+  groupId: string;
+} {
+  const trimmed = stripSignalChannelPrefix(raw);
+  const lower = trimmed.toLowerCase();
+  const e164 = normalizeE164(trimmed);
+  const uuid = lower.startsWith("uuid:") ? trimmed.slice("uuid:".length).trim().toLowerCase() : "";
+  const groupId = lower.startsWith("group:") ? trimmed.slice("group:".length).trim() : trimmed;
+  return { raw: trimmed, lower, e164, uuid, groupId };
+}
+
+function resolveSignalContactTarget(params: {
+  contacts: Awaited<ReturnType<typeof listSignalContacts>>;
+  input: string;
+}) {
+  const normalized = normalizeSignalResolverInput(params.input);
+  const toResolved = (contact: Awaited<ReturnType<typeof listSignalContacts>>[number]) => {
+    const number = typeof contact.number === "string" ? normalizeE164(contact.number) : "";
+    const uuid = typeof contact.uuid === "string" ? contact.uuid.trim().toLowerCase() : "";
+    const name = typeof contact.name === "string" ? contact.name.trim() : "";
+    const id = number || (uuid ? `uuid:${uuid}` : "");
+    return {
+      input: params.input,
+      resolved: Boolean(id),
+      ...(id ? { id } : {}),
+      ...(name ? { name } : {}),
+    };
+  };
+  const exactIdMatches = params.contacts.filter((contact) => {
+    const number = typeof contact.number === "string" ? normalizeE164(contact.number) : "";
+    const uuid = typeof contact.uuid === "string" ? contact.uuid.trim().toLowerCase() : "";
+    return Boolean((normalized.e164 && number === normalized.e164) || (normalized.uuid && uuid === normalized.uuid));
+  });
+  if (exactIdMatches.length === 1) {
+    return toResolved(exactIdMatches[0]!);
+  }
+  if (exactIdMatches.length > 1) {
+    return { input: params.input, resolved: false, note: "ambiguous contact match" };
+  }
+
+  const exactNameMatches = params.contacts.filter((contact) => {
+    const name = typeof contact.name === "string" ? contact.name.trim().toLowerCase() : "";
+    return Boolean(normalized.lower && name === normalized.lower);
+  });
+  if (exactNameMatches.length === 1) {
+    return toResolved(exactNameMatches[0]!);
+  }
+  if (exactNameMatches.length > 1) {
+    return { input: params.input, resolved: false, note: "ambiguous contact match" };
+  }
+
+  const partialNameMatches = params.contacts.filter((contact) => {
+    const name = typeof contact.name === "string" ? contact.name.trim().toLowerCase() : "";
+    return Boolean(normalized.lower && name.includes(normalized.lower));
+  });
+  if (partialNameMatches.length === 1) {
+    return toResolved(partialNameMatches[0]!);
+  }
+  if (partialNameMatches.length > 1) {
+    return { input: params.input, resolved: false, note: "ambiguous contact match" };
+  }
+
+  return { input: params.input, resolved: false, note: "no matching Signal contact" };
+}
+
+function resolveSignalGroupTarget(params: {
+  groups: Awaited<ReturnType<typeof listSignalGroups>>;
+  input: string;
+}) {
+  const normalized = normalizeSignalResolverInput(params.input);
+  const toResolved = (group: Awaited<ReturnType<typeof listSignalGroups>>[number]) => {
+    const groupId = typeof group.id === "string" ? group.id.trim() : "";
+    const name = typeof group.name === "string" ? group.name.trim() : "";
+    return {
+      input: params.input,
+      resolved: Boolean(groupId),
+      ...(groupId ? { id: `group:${groupId}` } : {}),
+      ...(name ? { name } : {}),
+    };
+  };
+  const exactIdMatches = params.groups.filter((group) => {
+    const groupId = typeof group.id === "string" ? group.id.trim() : "";
+    return Boolean(normalized.groupId && groupId === normalized.groupId);
+  });
+  if (exactIdMatches.length === 1) {
+    return toResolved(exactIdMatches[0]!);
+  }
+  if (exactIdMatches.length > 1) {
+    return { input: params.input, resolved: false, note: "ambiguous group match" };
+  }
+
+  const exactNameMatches = params.groups.filter((group) => {
+    const name = typeof group.name === "string" ? group.name.trim().toLowerCase() : "";
+    return Boolean(normalized.lower && name === normalized.lower);
+  });
+  if (exactNameMatches.length === 1) {
+    return toResolved(exactNameMatches[0]!);
+  }
+  if (exactNameMatches.length > 1) {
+    return { input: params.input, resolved: false, note: "ambiguous group match" };
+  }
+
+  const partialNameMatches = params.groups.filter((group) => {
+    const name = typeof group.name === "string" ? group.name.trim().toLowerCase() : "";
+    return Boolean(normalized.lower && name.includes(normalized.lower));
+  });
+  if (partialNameMatches.length === 1) {
+    return toResolved(partialNameMatches[0]!);
+  }
+  if (partialNameMatches.length > 1) {
+    return { input: params.input, resolved: false, note: "ambiguous group match" };
+  }
+
+  return { input: params.input, resolved: false, note: "no matching Signal group" };
+}
+
 const signalOutbound = {
   ...signalOutboundBase,
   sendPoll: async (ctx: { cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"]; to: string; poll: { question: string; options: string[]; maxSelections?: number | null }; accountId?: string | null }) => {
@@ -1168,6 +1288,25 @@ export const signalPlugin = createChatChannelPlugin<ResolvedSignalAccount, Signa
           })
           .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
         return applyDirectoryQueryAndLimit(entries, undefined, limit);
+      },
+    },
+    resolver: {
+      resolveTargets: async ({ cfg, accountId, inputs, kind }) => {
+        if (kind === "group") {
+          const groups = await listSignalGroups(
+            {
+              cfg,
+              accountId: accountId ?? undefined,
+            },
+            { detailed: false },
+          );
+          return inputs.map((input) => resolveSignalGroupTarget({ groups, input }));
+        }
+        const contacts = await listSignalContacts({
+          cfg,
+          accountId: accountId ?? undefined,
+        });
+        return inputs.map((input) => resolveSignalContactTarget({ contacts, input }));
       },
     },
   },
