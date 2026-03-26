@@ -1,6 +1,6 @@
 # openclaw-signal-custom
 
-A standalone Signal channel plugin for [OpenClaw](https://github.com/nicosql/openclaw), powered by `signal-cli`. Plugin id: `signal-custom`, config root: `channels.signal-custom`. Requires OpenClaw `>= 2026.3.24`.
+A standalone Signal channel plugin for [OpenClaw](https://github.com/nicosql/openclaw), powered by `signal-cli`. Plugin id: `signal-custom`, config root: `channels.signal-custom`. Requires OpenClaw `>= 2026.3.24` and is source-validated against the local `REFERENCE_UNTRACKED/openclaw` checkout at `2026.3.25`.
 
 This is a drop-in replacement for the bundled Signal channel. It covers the full `signal-cli` surface — DMs, groups, media, reactions, polls, stickers, stories, mentions, message editing, group admin, and more — with tested transport, clean formatting, and an access-control model that actually works.
 
@@ -12,6 +12,7 @@ This is a drop-in replacement for the bundled Signal channel. It covers the full
 - Native `@mentions` with automatic offset remapping from Markdown
 - Reply/quote threading, silent sends, typing indicators, read receipts
 - Configurable text chunking for long messages
+- Block and draft streaming modes for long replies
 
 **Group chat**
 - Per-group `requireMention` mode and tool/skill policies
@@ -37,7 +38,7 @@ This is a drop-in replacement for the bundled Signal channel. It covers the full
 - Auto-spawn and monitor a local `signal-cli` daemon, or connect to an external one
 - HTTP JSON-RPC and TCP socket transports
 - SSE event streaming with JSON-RPC polling fallback
-- Automatic reconnection with exponential backoff
+- Shared reconnect policy with supervised gateway restarts
 
 ## Install
 
@@ -148,6 +149,7 @@ See [src/config.ts](./src/config.ts) for the full schema with types and defaults
 | `httpUrl` | string | URL of an external JSON-RPC daemon |
 | `cliPath` | string | Path to `signal-cli` binary (default: `"signal-cli"`) |
 | `autoStart` | boolean | Spawn a local daemon automatically (default: `true`) |
+| `receiveMode` | string | `on-start` or `manual` receive subscription mode |
 
 ### Access control
 
@@ -163,10 +165,49 @@ See [src/config.ts](./src/config.ts) for the full schema with types and defaults
 | Key | Description |
 |-----|-------------|
 | `textChunkLimit` | Max characters per outbound text chunk |
+| `streaming` | `off`, `block`, or `draft` reply streaming mode |
 | `typingTtlMs` | Max duration for typing indicators |
 | `sendReadReceipts` | Send read receipts on inbound messages |
 | `responsePrefix` | Prefix applied to all bot replies |
 | `mediaMaxMb` | Max inbound media size in MB |
+| `replyToMode` | `off`, `first`, or `all` reply-tag forwarding policy |
+| `directoryRefreshTtlMs` | Contact/group directory cache refresh TTL in milliseconds |
+
+### Runtime resilience
+
+| Key | Description |
+|-----|-------------|
+| `reconnect.initialMs` | Initial transport reconnect delay in milliseconds |
+| `reconnect.maxMs` | Max transport reconnect delay in milliseconds |
+| `reconnect.factor` | Exponential backoff multiplier for transport reconnects |
+| `reconnect.jitter` | Jitter ratio for transport reconnects |
+| `reconnect.maxAttempts` | Max reconnect attempts before the outer supervisor restarts the gateway cycle |
+| `supervision.initialMs` | Initial full-cycle restart delay in milliseconds |
+| `supervision.maxMs` | Max full-cycle restart delay in milliseconds |
+| `supervision.factor` | Exponential backoff multiplier for supervised restarts |
+| `supervision.jitter` | Jitter ratio for supervised restarts |
+| `supervision.maxAttempts` | Max supervised restart attempts before the account is marked failed |
+| `supervision.drainGraceMs` | Grace period before managed daemon shutdown during gateway stop/restart |
+
+### Exec approvals
+
+Signal can act as an exec-approval surface through per-account `execApprovals`:
+
+```json5
+{
+  channels: {
+    "signal-custom": {
+      execApprovals: {
+        enabled: true,
+        approvers: ["+15550001111"],
+        target: "dm", // "dm", "channel", or "both"
+      },
+    },
+  },
+}
+```
+
+Use `target: "dm"` to route approvals through direct chats, `target: "channel"` for group-only routing, or `target: "both"` to allow both.
 
 ### Reactions
 
@@ -190,6 +231,7 @@ Fine-grained toggles under `actions`:
         poll: true,
         editMessage: true,
         deleteMessage: true,
+        pinMessage: true,
         stickers: true,
         groupManagement: true,
       },

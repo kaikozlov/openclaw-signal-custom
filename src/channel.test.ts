@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { signalPlugin } from "./channel.js";
+import { resolveSignalAccount } from "./config.js";
 import { setSignalRuntime } from "./runtime.js";
 import {
   __clearSignalReactionTargetCacheForTests,
@@ -36,6 +37,21 @@ describe("signalPlugin outbound sendMedia", () => {
     expect(signalPlugin.capabilities?.polls).toBe(true);
     expect(signalPlugin.capabilities?.unsend).toBe(true);
     expect(signalPlugin.mentions?.stripPatterns?.({} as never)).toEqual(["\uFFFC"]);
+  });
+
+  it("advertises Signal-specific message tool hints", () => {
+    expect(
+      signalPlugin.agentPrompt?.messageToolHints?.({
+        cfg: makeSignalCfg(),
+        accountId: "default",
+      } as never),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("view-once"),
+        expect.stringContaining("story replies"),
+        expect.stringContaining("mentions"),
+      ]),
+    );
   });
 
   it("formats signal daemon version in capabilities probe output", () => {
@@ -89,6 +105,52 @@ describe("signalPlugin outbound sendMedia", () => {
     }
   });
 
+  it("extracts direct send targets from message-tool sendMessage actions", () => {
+    expect(
+      signalPlugin.actions?.extractToolSend?.({
+        args: {
+          action: "sendMessage",
+          to: "signal-custom:group:grp1",
+          accountId: "work",
+        },
+      }),
+    ).toEqual({
+      to: "group:grp1",
+      accountId: "work",
+    });
+  });
+
+  it("exposes merged per-group allowlist overrides through the allowlist adapter", async () => {
+    const readConfig = await signalPlugin.allowlist?.readConfig?.({
+      cfg: makeSignalCfg({
+        groups: {
+          "*": { allowFrom: ["+15550001111"] },
+          grp1: { allowFrom: ["+15550002222"] },
+        },
+        accounts: {
+          Work: {
+            groups: {
+              grp1: { allowFrom: ["uuid:123e4567-e89b-12d3-a456-426614174000"] },
+            },
+          },
+        },
+      }),
+      accountId: "work",
+    });
+
+    expect(readConfig).toEqual(
+      expect.objectContaining({
+        groupOverrides: [
+          { label: "Signal groups (*)", entries: ["+15550001111"] },
+          {
+            label: "Signal group grp1",
+            entries: ["uuid:123e4567-e89b-12d3-a456-426614174000"],
+          },
+        ],
+      }),
+    );
+  });
+
   it("inspects signal account state through the plugin config adapter", () => {
     const inspected = signalPlugin.config.inspectAccount?.(
       {
@@ -117,8 +179,182 @@ describe("signalPlugin outbound sendMedia", () => {
         accountNumber: "+15550002222",
         baseUrl: "http://127.0.0.1:8080",
         connectionMode: "tcp",
+        transportSummary: "managed HTTP + TCP transport",
+        effectiveAutoStart: true,
+        configPathSet: true,
+        attachmentFastPathLikely: true,
+        receiveMode: "on-start",
       }),
     );
+  });
+
+  it("includes transport diagnostics in the account status snapshot", async () => {
+    const account = resolveSignalAccount({
+      cfg: {
+        channels: {
+          "signal-custom": {
+            accounts: {
+              Work: {
+                account: "+15550002222",
+                httpUrl: "http://signal.example:8080",
+              },
+            },
+          },
+        },
+      } as never,
+      accountId: "work",
+    });
+
+    const snapshot = await signalPlugin.status?.buildAccountSnapshot?.({
+      account,
+      runtime: null,
+      probe: { ok: false, error: "timeout" },
+    } as never);
+
+    expect(snapshot).toEqual(
+      expect.objectContaining({
+        accountId: "work",
+        baseUrl: "http://signal.example:8080",
+        connectionMode: "external-http",
+        transportSummary: "external HTTP daemon",
+        effectiveAutoStart: false,
+        configPathSet: false,
+        attachmentFastPathLikely: false,
+        receiveMode: "on-start",
+      }),
+    );
+    expect(
+      signalPlugin.status?.formatCapabilitiesProbe?.({
+        probe: { ok: false, error: "timeout" },
+      } as never),
+    ).toEqual([{ text: "Signal probe error: timeout" }]);
+  });
+
+  it("compiles and matches configured Signal ACP conversation bindings", () => {
+    const compiled = signalPlugin.bindings?.compileConfiguredBinding({
+      binding: {} as never,
+      conversationId: "signal-custom:group:test-group",
+    });
+
+    expect(compiled).toEqual({ conversationId: "group:test-group" });
+    expect(
+      signalPlugin.bindings?.matchInboundConversation({
+        binding: {} as never,
+        compiledBinding: compiled ?? { conversationId: "" },
+        conversationId: "group:test-group",
+      }),
+    ).toEqual({ conversationId: "group:test-group", matchPriority: 2 });
+    expect(
+      signalPlugin.bindings?.matchInboundConversation({
+        binding: {} as never,
+        compiledBinding: compiled ?? { conversationId: "" },
+        conversationId: "+15550001111",
+      }),
+    ).toBeNull();
+  });
+
+  it("exposes Signal exec-approval integration when approvers are configured", () => {
+    const cfg = {
+      channels: {
+        "signal-custom": {
+          account: "+15551234567",
+          execApprovals: {
+            enabled: true,
+            approvers: ["+15550001111"],
+            target: "dm",
+          },
+        },
+      },
+    } as never;
+
+    expect(
+      signalPlugin.execApprovals?.getInitiatingSurfaceState?.({
+        cfg,
+        accountId: "default",
+      }),
+    ).toEqual({ kind: "enabled" });
+    expect(signalPlugin.execApprovals?.hasConfiguredDmRoute?.({ cfg })).toBe(true);
+    expect(
+      signalPlugin.execApprovals?.shouldSuppressForwardingFallback?.({
+        cfg,
+        target: { channel: "signal-custom", to: "+15550001111", accountId: "default" },
+        request: {
+          id: "approval-1",
+          request: {
+            turnSourceChannel: "signal-custom",
+            turnSourceAccountId: "default",
+          },
+        },
+      } as never),
+    ).toBe(true);
+  });
+
+  it("does not advertise a DM exec-approval route for channel-only configs", () => {
+    const cfg = {
+      channels: {
+        "signal-custom": {
+          account: "+15551234567",
+          execApprovals: {
+            enabled: true,
+            approvers: ["+15550001111"],
+            target: "channel",
+          },
+        },
+      },
+    } as never;
+
+    expect(signalPlugin.execApprovals?.hasConfiguredDmRoute?.({ cfg })).toBe(false);
+    expect(
+      signalPlugin.execApprovals?.shouldSuppressForwardingFallback?.({
+        cfg,
+        target: { channel: "signal-custom", to: "+15550001111", accountId: "default" },
+        request: {
+          id: "approval-1",
+          request: {
+            turnSourceChannel: "signal-custom",
+            turnSourceAccountId: "default",
+          },
+        },
+      } as never),
+    ).toBe(false);
+    expect(
+      signalPlugin.execApprovals?.shouldSuppressForwardingFallback?.({
+        cfg,
+        target: { channel: "signal-custom", to: "group:grp1", accountId: "default" },
+        request: {
+          id: "approval-2",
+          request: {
+            turnSourceChannel: "signal-custom",
+            turnSourceAccountId: "default",
+          },
+        },
+      } as never),
+    ).toBe(true);
+  });
+
+  it("normalizes Signal threading reply transport to replyToId", () => {
+    expect(
+      signalPlugin.threading?.resolveReplyTransport?.({
+        cfg: {} as never,
+        accountId: "default",
+        threadId: "1712345678901",
+      }),
+    ).toEqual({
+      replyToId: "1712345678901",
+      threadId: null,
+    });
+    expect(
+      signalPlugin.threading?.resolveReplyToMode?.({
+        cfg: {
+          channels: {
+            "signal-custom": {
+              replyToMode: "first",
+            },
+          },
+        } as never,
+        accountId: "default",
+      }),
+    ).toBe("first");
   });
 
   it("resolves user targets from signal contacts", async () => {
@@ -362,29 +598,27 @@ describe("signalPlugin outbound sendMedia", () => {
   });
 
   it("resolves requireMention + tool policy from signal group config", () => {
-    setSignalRuntime({
-      channel: {
-        groups: {
-          resolveRequireMention: (params: { cfg: any; groupId?: string | null }) =>
-            params.cfg.channels?.["signal-custom"]?.groups?.[params.groupId ?? ""]?.requireMention ?? true,
-          resolveGroupPolicy: (params: { cfg: any; groupId?: string | null }) => ({
-            allowlistEnabled: false,
-            allowed: true,
-            groupConfig: params.cfg.channels?.["signal-custom"]?.groups?.[params.groupId ?? ""],
-          }),
-        },
-      },
-    } as never);
-
     const cfg = {
       channels: {
         "signal-custom": {
           groups: {
-            "signal:group:grp-1": {
+            "*": {
+              requireMention: true,
+              tools: { deny: ["exec"] },
+            },
+            grp1: {
               requireMention: false,
               tools: { allow: ["message"] },
-              toolsBySender: {
-                "id:user-123": { deny: ["exec"] },
+            },
+          },
+          accounts: {
+            Work: {
+              groups: {
+                grp1: {
+                  toolsBySender: {
+                    "id:user-123": { deny: ["exec"] },
+                  },
+                },
               },
             },
           },
@@ -394,13 +628,13 @@ describe("signalPlugin outbound sendMedia", () => {
 
     const requireMention = signalPlugin.groups?.resolveRequireMention?.({
       cfg,
-      groupId: "signal:group:grp-1",
-      accountId: "default",
+      groupId: "signal:group:grp1",
+      accountId: "work",
     });
     const toolPolicy = signalPlugin.groups?.resolveToolPolicy?.({
       cfg,
-      groupId: "signal:group:grp-1",
-      accountId: "default",
+      groupId: "signal:group:grp1",
+      accountId: "work",
       senderId: "user-123",
     });
 
@@ -765,20 +999,36 @@ describe("signalPlugin outbound sendMedia", () => {
   });
 
   it("keeps discovery limited to send when optional actions are disabled", () => {
-    const actions = signalPlugin.actions?.describeMessageTool?.({
+    const discovery = signalPlugin.actions?.describeMessageTool?.({
       cfg: makeSignalCfg({
         actions: {
           reactions: false,
           unsend: false,
           editMessage: false,
           deleteMessage: false,
+          pinMessage: false,
           stickers: false,
           groupManagement: false,
         },
       }),
-    })?.actions;
+    });
 
-    expect(actions).toEqual(["send"]);
+    expect(discovery?.actions).toEqual(["send"]);
+    expect(discovery?.schema).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          visibility: "all-configured",
+          properties: expect.objectContaining({
+            mentions: expect.anything(),
+            viewOnce: expect.anything(),
+            quoteAuthor: expect.anything(),
+            storyTimestamp: expect.anything(),
+            storyAuthor: expect.anything(),
+          }),
+        }),
+      ]),
+    );
+    expect(discovery?.capabilities).toEqual([]);
   });
 
   it("lists edit/delete actions from plugin-local gate when enabled", () => {
@@ -805,6 +1055,107 @@ describe("signalPlugin outbound sendMedia", () => {
     expect(actions).toContain("edit");
     expect(actions).toContain("delete");
     expect(actions).toContain("unsend");
+  });
+
+  it("lists pin/unpin actions when actions.pinMessage is enabled", () => {
+    const actions = signalPlugin.actions?.describeMessageTool?.({
+      cfg: makeSignalCfg({
+        actions: {
+          pinMessage: true,
+        },
+      }),
+    })?.actions ?? [];
+
+    expect(actions).toContain("pin");
+    expect(actions).toContain("unpin");
+  });
+
+  it("handles local send actions with Signal-specific media options", async () => {
+    const originalFetch = global.fetch;
+    const fetchMock = vi.fn<typeof fetch>();
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ jsonrpc: "2.0", result: { timestamp: 1700000000005 } }),
+    );
+    global.fetch = fetchMock;
+    try {
+      const result = await signalPlugin.actions?.handleAction?.({
+        channel: "signal-custom",
+        action: "send",
+        cfg: makeSignalCfg(),
+        params: {
+          to: "signal:group:group-1",
+          message: "hello",
+          replyTo: "1700000000000",
+          silent: true,
+          quoteAuthor: "uuid:123e4567-e89b-12d3-a456-426614174000",
+          storyTimestamp: 1700000000001,
+          storyAuthor: "+15550002222",
+          mentions: [
+            {
+              start: 0,
+              length: 5,
+              recipient: "signal:uuid:123e4567-e89b-12d3-a456-426614174000",
+            },
+          ],
+        },
+      } as never);
+
+      expect(result).toEqual(
+        expect.objectContaining({
+          details: expect.objectContaining({
+            ok: true,
+            sent: true,
+            messageId: "1700000000005",
+            messageIds: ["1700000000005"],
+          }),
+        }),
+      );
+      const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+        method: string;
+        params: Record<string, unknown>;
+      };
+      expect(body.method).toBe("send");
+      expect(body.params).toEqual(
+        expect.objectContaining({
+          groupId: "group-1",
+          account: "+15550001111",
+          message: "hello",
+          noUrgent: true,
+          quoteTimestamp: 1700000000000,
+          quoteAuthor: "uuid:123e4567-e89b-12d3-a456-426614174000",
+          "story-timestamp": 1700000000001,
+          "story-author": "+15550002222",
+          mention: ["0:5:123e4567-e89b-12d3-a456-426614174000"],
+        }),
+      );
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it("blocks pin when actions.pinMessage is disabled", async () => {
+    await expect(
+      signalPlugin.actions?.handleAction?.({
+        channel: "signal-custom",
+        action: "pin",
+        cfg: {
+          channels: {
+            "signal-custom": {
+              account: "+15550001111",
+              httpUrl: "http://signal.local",
+              actions: {
+                pinMessage: false,
+              },
+            },
+          },
+        } as never,
+        params: {
+          to: "signal:+15550001111",
+          messageId: "1700000000000",
+          targetAuthor: "+15550001111",
+        },
+      } as never),
+    ).rejects.toThrow(/actions\.pinMessage/);
   });
 
   it("blocks unsend when actions.unsend is disabled", async () => {
@@ -963,6 +1314,74 @@ describe("signalPlugin outbound sendMedia", () => {
             details: expect.objectContaining({
               ok: true,
               deleted: true,
+              messageId: "1700000000000",
+            }),
+          }),
+        );
+      } finally {
+        global.fetch = originalFetch;
+      }
+    },
+  );
+
+  it.each([
+    ["pin", "sendPinMessage"],
+    ["unpin", "sendUnpinMessage"],
+  ] as const)(
+    "handles %s action locally without runtime messageActions.handleAction",
+    async (action, method) => {
+      const handleAction = vi.fn(async (_ctx: unknown) => ({ content: [] }));
+      setSignalRuntime({
+        channel: {
+          signal: {
+            messageActions: {
+              handleAction,
+            },
+          },
+        },
+      } as never);
+
+      const originalFetch = global.fetch;
+      const fetchMock = vi.fn<typeof fetch>();
+      fetchMock.mockResolvedValueOnce(
+        makeResponse({ jsonrpc: "2.0", result: { timestamp: 1700000000005 } }),
+      );
+      global.fetch = fetchMock;
+      try {
+        const result = await signalPlugin.actions?.handleAction?.({
+          channel: "signal-custom",
+          action,
+          cfg: makeSignalCfg(),
+          params: {
+            to: "signal:group:group-1",
+            messageId: "1700000000000",
+            targetAuthor: "+15550002222",
+            pinDuration: -1,
+          },
+        } as never);
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(handleAction).not.toHaveBeenCalled();
+        const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+          method: string;
+          params: Record<string, unknown>;
+        };
+        expect(body.method).toBe(method);
+        expect(body.params).toEqual(
+          expect.objectContaining({
+            groupId: "group-1",
+            targetAuthor: "+15550002222",
+            targetTimestamp: 1700000000000,
+          }),
+        );
+        if (action === "pin") {
+          expect(body.params.pinDuration).toBe(-1);
+        }
+        expect(result).toEqual(
+          expect.objectContaining({
+            details: expect.objectContaining({
+              ok: true,
+              ...(action === "pin" ? { pinned: true } : { unpinned: true }),
               messageId: "1700000000000",
             }),
           }),
@@ -1703,6 +2122,61 @@ describe("signalPlugin outbound sendMedia", () => {
         method: string;
       };
       expect(body.method).toBe("listContacts");
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it("refreshes peer directory results on subsequent lookups", async () => {
+    const originalFetch = global.fetch;
+    const fetchMock = vi.fn<typeof fetch>();
+    fetchMock
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        statusText: "OK",
+        text: async () =>
+          JSON.stringify({
+            jsonrpc: "2.0",
+            result: [{ number: "+15550002222", name: "Alice" }],
+          }),
+      } as Response)
+      .mockResolvedValueOnce({
+        status: 200,
+        ok: true,
+        statusText: "OK",
+        text: async () =>
+          JSON.stringify({
+            jsonrpc: "2.0",
+            result: [{ number: "+15550002222", name: "Jordan" }],
+          }),
+      } as Response);
+    global.fetch = fetchMock;
+    try {
+      const params = {
+        cfg: {
+          channels: {
+            "signal-custom": {
+              account: "+15550001111",
+              httpUrl: "http://signal.local",
+            },
+          },
+        } as never,
+      } as never;
+
+      await expect(signalPlugin.directory?.listPeers?.(params)).resolves.toEqual([
+        expect.objectContaining({
+          id: "+15550002222",
+          name: "Alice",
+        }),
+      ]);
+      await expect(signalPlugin.directory?.listPeers?.(params)).resolves.toEqual([
+        expect.objectContaining({
+          id: "+15550002222",
+          name: "Jordan",
+        }),
+      ]);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     } finally {
       global.fetch = originalFetch;
     }

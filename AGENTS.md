@@ -17,6 +17,38 @@
   - `package.json:openclaw.channel.id`
 - This repo mirrors OpenClaw channel patterns where useful, but it does not own OpenClaw core surfaces such as CLI wiring, app UIs, Mintlify docs, mobile apps, or maintainer release tooling.
 
+## Plugin Notes
+
+- Map:
+  - `src/channel.ts`: main OpenClaw plugin contract. If a feature should be visible to OpenClaw, it usually changes here.
+  - `src/shared.ts`: config/setup/status/allowlist adapters and agent hints.
+  - `src/config.ts`: schema plus account-resolution precedence. Do not accept config here unless runtime enforces it.
+  - `src/setup-wizard.ts`: setup UX. Keep its parsing aligned with config/security normalization.
+  - `src/outbound.ts`: normal reply-send pipeline.
+  - `src/signal/monitor/event-handler.ts`: main inbound logic and highest-risk file.
+  - `src/signal/send.ts` and `src/signal/send-actions.ts`: actual Signal RPC parameter shaping.
+
+- Rules:
+  - Keep config truthful. Documented or accepted config must have real runtime behavior.
+  - Keep discovery truthful. Do not advertise message-tool fields or actions the plugin cannot execute.
+  - Keep access explicit. `requireMention`, `skills`, or `systemPrompt` must never widen DM/group access.
+  - Normalize once. Shared things like allowlist entries, sender IDs, group keys, and targets should have one helper each.
+  - Prefer small helpers over adding more branching to `channel.ts` or `event-handler.ts`.
+
+- References:
+  - `REFERENCE_UNTRACKED/openclaw/` for current plugin contract and official channel patterns.
+  - `REFERENCE_UNTRACKED/signal-cli/` before claiming any Signal RPC method, JSON field, or attachment capability exists.
+
+- Test order:
+  - config/setup: `src/config.test.ts`, `src/setup-wizard.test.ts`
+  - inbound: `src/signal/monitor.test.ts`, `src/signal/monitor.edge-cases.test.ts`, `src/signal/monitor.rich-context.test.ts`
+  - outbound/actions: `src/channel.test.ts`, `src/channel.outbound.test.ts`, `src/signal/send.test.ts`, `src/signal/send-actions.test.ts`
+  - broad changes: `pnpm check`
+
+- Version note:
+  - Keep `package.json` on the latest published `openclaw` version unless the user explicitly wants a local-only dependency.
+  - It is fine to source-check behavior against a newer `REFERENCE_UNTRACKED/openclaw` checkout, but document that clearly.
+
 ## Import Boundaries
 
 - Treat `openclaw/plugin-sdk/*` and local plugin barrels such as `src/runtime-api.ts` as the supported dependency surface.

@@ -7,6 +7,7 @@ import type {
   RuntimeEnv,
 } from "../../runtime-api.js";
 import type { SignalReactionNotificationMode } from "../../config.js";
+import type { SignalStreamingMode } from "../../config.js";
 import type { SignalSender } from "../identity.js";
 
 export type SignalEnvelope = {
@@ -188,6 +189,7 @@ export type SignalEventHandlerDeps = {
   account?: string;
   accountUuid?: string;
   accountId: string;
+  streamMode?: SignalStreamingMode;
   blockStreaming?: boolean;
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;

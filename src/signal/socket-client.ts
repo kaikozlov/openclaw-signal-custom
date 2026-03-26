@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
 import net from "node:net";
+import {
+  computeSignalBackoff,
+  resolveSignalReconnectPolicy,
+  type SignalReconnectPolicy,
+  type SignalReconnectPolicyInput,
+} from "./reconnect-policy.js";
 
 export type SignalSocketRequestOptions = {
   timeoutMs?: number;
@@ -16,13 +22,6 @@ type PendingRequest = {
   timer: ReturnType<typeof setTimeout>;
 };
 
-export type SignalSocketReconnectPolicy = {
-  initialMs?: number;
-  maxMs?: number;
-  factor?: number;
-  jitter?: number;
-};
-
 export type SignalSocketClientOptions = {
   host: string;
   port: number;
@@ -31,53 +30,12 @@ export type SignalSocketClientOptions = {
   onConnect?: () => void;
   onDisconnect?: (err?: Error) => void;
   reconnect?: boolean;
-  reconnectPolicy?: SignalSocketReconnectPolicy;
+  reconnectPolicy?: SignalReconnectPolicyInput;
   log?: (message: string) => void;
   error?: (message: string) => void;
 };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
-const DEFAULT_RECONNECT_POLICY = {
-  initialMs: 1_000,
-  maxMs: 10_000,
-  factor: 2,
-  jitter: 0.2,
-};
-
-function computeBackoff(policy: Required<SignalSocketReconnectPolicy>, attempt: number): number {
-  const exponent = Math.max(0, attempt - 1);
-  const withoutJitter = Math.min(policy.maxMs, policy.initialMs * policy.factor ** exponent);
-  if (policy.jitter <= 0) {
-    return Math.trunc(withoutJitter);
-  }
-  const spread = withoutJitter * policy.jitter;
-  const randomOffset = (Math.random() * 2 - 1) * spread;
-  return Math.max(0, Math.trunc(withoutJitter + randomOffset));
-}
-
-function resolveReconnectPolicy(
-  policy?: SignalSocketReconnectPolicy,
-): Required<SignalSocketReconnectPolicy> {
-  return {
-    initialMs:
-      typeof policy?.initialMs === "number" && Number.isFinite(policy.initialMs)
-        ? Math.max(0, Math.trunc(policy.initialMs))
-        : DEFAULT_RECONNECT_POLICY.initialMs,
-    maxMs:
-      typeof policy?.maxMs === "number" && Number.isFinite(policy.maxMs)
-        ? Math.max(0, Math.trunc(policy.maxMs))
-        : DEFAULT_RECONNECT_POLICY.maxMs,
-    factor:
-      typeof policy?.factor === "number" && Number.isFinite(policy.factor)
-        ? Math.max(1, policy.factor)
-        : DEFAULT_RECONNECT_POLICY.factor,
-    jitter:
-      typeof policy?.jitter === "number" && Number.isFinite(policy.jitter)
-        ? Math.max(0, Math.min(1, policy.jitter))
-        : DEFAULT_RECONNECT_POLICY.jitter,
-  };
-}
-
 export class SignalSocketClient {
   private socket: net.Socket | null = null;
   private pending = new Map<string, PendingRequest>();
@@ -95,7 +53,7 @@ export class SignalSocketClient {
   private readonly onConnect?: () => void;
   private readonly onDisconnect?: (err?: Error) => void;
   private readonly shouldReconnect: boolean;
-  private readonly reconnectPolicy: Required<SignalSocketReconnectPolicy>;
+  private readonly reconnectPolicy: SignalReconnectPolicy;
   private readonly log: (message: string) => void;
   private readonly logError: (message: string) => void;
 
@@ -107,7 +65,7 @@ export class SignalSocketClient {
     this.onConnect = opts.onConnect;
     this.onDisconnect = opts.onDisconnect;
     this.shouldReconnect = opts.reconnect ?? true;
-    this.reconnectPolicy = resolveReconnectPolicy(opts.reconnectPolicy);
+    this.reconnectPolicy = resolveSignalReconnectPolicy(opts.reconnectPolicy);
     this.log = opts.log ?? (() => {});
     this.logError = opts.error ?? (() => {});
   }
@@ -308,8 +266,16 @@ export class SignalSocketClient {
       return;
     }
     this.reconnectAttempt += 1;
-    const delayMs = computeBackoff(this.reconnectPolicy, this.reconnectAttempt);
-    this.log(`Signal socket reconnecting in ${delayMs}ms (attempt ${this.reconnectAttempt})...`);
+    if (this.reconnectAttempt > this.reconnectPolicy.maxAttempts) {
+      this.logError(
+        `Signal socket reconnect exhausted after ${this.reconnectPolicy.maxAttempts} attempts`,
+      );
+      return;
+    }
+    const delayMs = computeSignalBackoff(this.reconnectPolicy, this.reconnectAttempt);
+    this.log(
+      `Signal socket reconnecting in ${delayMs}ms (attempt ${this.reconnectAttempt}/${this.reconnectPolicy.maxAttempts})...`,
+    );
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;

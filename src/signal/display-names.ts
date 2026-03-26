@@ -3,6 +3,8 @@ import type { SignalSender } from "./identity.js";
 import type { SignalMention } from "./monitor/event-handler.types.js";
 import { listSignalContacts } from "./directory.js";
 
+const DEFAULT_SIGNAL_DIRECTORY_REFRESH_TTL_MS = 5 * 60 * 1000;
+
 type SignalDisplayNameIndex = {
   byNumber: Map<string, string>;
   byUuid: Map<string, string>;
@@ -83,15 +85,42 @@ function resolveSenderDisplayNameFromIndex(
 export function createSignalDisplayNameResolver(params: {
   cfg: OpenClawConfig;
   accountId?: string;
+  refreshTtlMs?: number;
+  now?: () => number;
+  listContacts?: typeof listSignalContacts;
 }) {
   let contactIndexPromise: Promise<SignalDisplayNameIndex> | null = null;
+  let cachedIndex: SignalDisplayNameIndex | null = null;
+  let cachedAt = 0;
+  const refreshTtlMs = Math.max(0, params.refreshTtlMs ?? DEFAULT_SIGNAL_DIRECTORY_REFRESH_TTL_MS);
+  const now = params.now ?? Date.now;
+  const listContacts = params.listContacts ?? listSignalContacts;
 
   const loadContactIndex = async (): Promise<SignalDisplayNameIndex> => {
+    const ageMs = now() - cachedAt;
+    if (cachedIndex && ageMs >= 0 && ageMs < refreshTtlMs) {
+      return cachedIndex;
+    }
     if (!contactIndexPromise) {
-      contactIndexPromise = listSignalContacts({
+      contactIndexPromise = listContacts({
         cfg: params.cfg,
         accountId: params.accountId,
-      }).then((contacts) => buildSignalDisplayNameIndex(contacts));
+      })
+        .then((contacts) => {
+          const next = buildSignalDisplayNameIndex(contacts);
+          cachedIndex = next;
+          cachedAt = now();
+          return next;
+        })
+        .catch((err) => {
+          if (cachedIndex) {
+            return cachedIndex;
+          }
+          throw err;
+        })
+        .finally(() => {
+          contactIndexPromise = null;
+        });
     }
     return await contactIndexPromise;
   };

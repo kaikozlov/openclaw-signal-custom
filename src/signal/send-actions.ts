@@ -1,6 +1,12 @@
 import type { OpenClawConfig } from "../runtime-api.js";
 import { signalRpcRequestWithRetry } from "./client.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
+import { resolveSignalMarkdownTableMode } from "../config.js";
+import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
+import {
+  buildSignalMentionParams,
+  type SignalMentionRange,
+} from "./send.js";
 
 export type SignalActionRpcOpts = {
   accountId?: string;
@@ -130,6 +136,9 @@ export async function editMessageSignal(params: {
   to: string;
   text: string;
   editTimestamp: number;
+  textMode?: "markdown" | "plain";
+  textStyles?: SignalTextStyleRange[];
+  mentions?: SignalMentionRange[];
   opts?: SignalActionRpcOpts;
 }): Promise<SignalSendResult> {
   if (!Number.isFinite(params.editTimestamp) || params.editTimestamp <= 0) {
@@ -143,10 +152,24 @@ export async function editMessageSignal(params: {
   if (!targetParams) {
     throw new Error("Signal recipient is required");
   }
-  const content = params.text.trim();
+  let content = params.text.trim();
   if (!content) {
     throw new Error("Signal edit requires text");
   }
+  const textMode = params.textMode ?? "markdown";
+  const textStyles =
+    textMode === "plain"
+      ? (params.textStyles ?? [])
+      : (() => {
+          const formatted = markdownToSignalText(content, {
+            tableMode: resolveSignalMarkdownTableMode({
+              cfg: params.cfg,
+              accountId: params.opts?.accountId,
+            }),
+          });
+          content = formatted.text;
+          return formatted.styles;
+        })();
 
   const context = resolveSignalRpcContext({
     cfg: params.cfg,
@@ -157,6 +180,14 @@ export async function editMessageSignal(params: {
     editTimestamp: params.editTimestamp,
     ...targetParams,
   };
+  if (textStyles.length > 0) {
+    rpcParams["text-style"] = textStyles.map(
+      (style) => `${style.start}:${style.length}:${style.style}`,
+    );
+  }
+  if (params.mentions?.length) {
+    rpcParams.mention = buildSignalMentionParams(params.mentions);
+  }
   if (context.account) {
     rpcParams.account = context.account;
   }
@@ -210,6 +241,112 @@ export async function deleteMessageSignal(params: {
     tcpHost: context.tcpHost,
     tcpPort: context.tcpPort,
   });
+}
+
+export async function pinMessageSignal(params: {
+  cfg: OpenClawConfig;
+  to: string;
+  targetAuthor: string;
+  targetTimestamp: number;
+  pinDurationSeconds?: number;
+  opts?: SignalActionRpcOpts;
+}): Promise<SignalSendResult> {
+  if (!Number.isFinite(params.targetTimestamp) || params.targetTimestamp <= 0) {
+    throw new Error("Signal pin requires a valid targetTimestamp");
+  }
+  const normalizedTargetAuthor = params.targetAuthor.trim();
+  if (!normalizedTargetAuthor) {
+    throw new Error("Signal pin requires targetAuthor");
+  }
+  const targetParams = buildTargetParams(parseTarget(params.to), {
+    recipient: true,
+    group: true,
+    username: true,
+  });
+  if (!targetParams) {
+    throw new Error("Signal recipient is required");
+  }
+
+  const context = resolveSignalRpcContext({
+    cfg: params.cfg,
+    accountId: params.opts?.accountId,
+  });
+  const rpcParams: Record<string, unknown> = {
+    targetAuthor: normalizedTargetAuthor,
+    targetTimestamp: params.targetTimestamp,
+    ...targetParams,
+  };
+  if (typeof params.pinDurationSeconds === "number" && Number.isFinite(params.pinDurationSeconds)) {
+    rpcParams.pinDuration = Math.trunc(params.pinDurationSeconds);
+  }
+  if (context.account) {
+    rpcParams.account = context.account;
+  }
+  const result = await signalRpcRequestWithRetry<{ timestamp?: number }>("sendPinMessage", rpcParams, {
+    baseUrl: context.baseUrl,
+    timeoutMs: params.opts?.timeoutMs,
+    retry: context.retry,
+    tcpHost: context.tcpHost,
+    tcpPort: context.tcpPort,
+  });
+  const timestamp = result?.timestamp;
+  return {
+    messageId: timestamp ? String(timestamp) : String(params.targetTimestamp),
+    timestamp,
+  };
+}
+
+export async function unpinMessageSignal(params: {
+  cfg: OpenClawConfig;
+  to: string;
+  targetAuthor: string;
+  targetTimestamp: number;
+  opts?: SignalActionRpcOpts;
+}): Promise<SignalSendResult> {
+  if (!Number.isFinite(params.targetTimestamp) || params.targetTimestamp <= 0) {
+    throw new Error("Signal unpin requires a valid targetTimestamp");
+  }
+  const normalizedTargetAuthor = params.targetAuthor.trim();
+  if (!normalizedTargetAuthor) {
+    throw new Error("Signal unpin requires targetAuthor");
+  }
+  const targetParams = buildTargetParams(parseTarget(params.to), {
+    recipient: true,
+    group: true,
+    username: true,
+  });
+  if (!targetParams) {
+    throw new Error("Signal recipient is required");
+  }
+
+  const context = resolveSignalRpcContext({
+    cfg: params.cfg,
+    accountId: params.opts?.accountId,
+  });
+  const rpcParams: Record<string, unknown> = {
+    targetAuthor: normalizedTargetAuthor,
+    targetTimestamp: params.targetTimestamp,
+    ...targetParams,
+  };
+  if (context.account) {
+    rpcParams.account = context.account;
+  }
+  const result = await signalRpcRequestWithRetry<{ timestamp?: number }>(
+    "sendUnpinMessage",
+    rpcParams,
+    {
+      baseUrl: context.baseUrl,
+      timeoutMs: params.opts?.timeoutMs,
+      retry: context.retry,
+      tcpHost: context.tcpHost,
+      tcpPort: context.tcpPort,
+    },
+  );
+  const timestamp = result?.timestamp;
+  return {
+    messageId: timestamp ? String(timestamp) : String(params.targetTimestamp),
+    timestamp,
+  };
 }
 
 export async function sendStickerSignal(params: {

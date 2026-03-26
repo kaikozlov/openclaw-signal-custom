@@ -11,6 +11,7 @@ import {
   type GroupToolPolicyBySenderConfig,
   type GroupToolPolicyConfig,
   type OpenClawConfig,
+  type ReplyToMode,
 } from "./runtime-api.js";
 import { z } from "zod";
 import { SIGNAL_CHANNEL_ID } from "./constants.js";
@@ -42,6 +43,29 @@ const RetryConfigSchema = z
   .strict()
   .optional();
 
+const ReconnectPolicySchema = z
+  .object({
+    initialMs: z.number().int().min(0).optional(),
+    maxMs: z.number().int().min(0).optional(),
+    factor: z.number().min(1).optional(),
+    jitter: z.number().min(0).max(1).optional(),
+    maxAttempts: z.number().int().min(1).optional(),
+  })
+  .strict()
+  .optional();
+
+const GatewaySupervisionSchema = z
+  .object({
+    initialMs: z.number().int().min(0).optional(),
+    maxMs: z.number().int().min(0).optional(),
+    factor: z.number().min(1).optional(),
+    jitter: z.number().min(0).max(1).optional(),
+    maxAttempts: z.number().int().min(1).optional(),
+    drainGraceMs: z.number().int().min(0).optional(),
+  })
+  .strict()
+  .optional();
+
 const DmConfigSchema = z
   .object({
     historyLimit: z.number().int().min(0).optional(),
@@ -67,8 +91,20 @@ const SignalActionsSchema = z
     poll: z.boolean().optional(),
     editMessage: z.boolean().optional(),
     deleteMessage: z.boolean().optional(),
+    pinMessage: z.boolean().optional(),
     stickers: z.boolean().optional(),
     groupManagement: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
+const SignalExecApprovalSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    approvers: z.array(z.union([z.string(), z.number()])).optional(),
+    agentFilter: z.array(z.string()).optional(),
+    sessionFilter: z.array(z.string()).optional(),
+    target: z.enum(["dm", "channel", "both"]).optional(),
   })
   .strict()
   .optional();
@@ -80,8 +116,21 @@ export type SignalRetryConfig = {
   jitter?: number;
 };
 
+export type SignalReconnectPolicyConfig = {
+  initialMs?: number;
+  maxMs?: number;
+  factor?: number;
+  jitter?: number;
+  maxAttempts?: number;
+};
+
+export type SignalGatewaySupervisionConfig = SignalReconnectPolicyConfig & {
+  drainGraceMs?: number;
+};
+
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
+export type SignalStreamingMode = "off" | "block" | "draft";
 
 export type SignalGroupConfig = {
   requireMention?: boolean;
@@ -99,8 +148,17 @@ export type SignalActionConfig = {
   poll?: boolean;
   editMessage?: boolean;
   deleteMessage?: boolean;
+  pinMessage?: boolean;
   stickers?: boolean;
   groupManagement?: boolean;
+};
+
+export type SignalExecApprovalConfig = {
+  enabled?: boolean;
+  approvers?: Array<string | number>;
+  agentFilter?: string[];
+  sessionFilter?: string[];
+  target?: "dm" | "channel" | "both";
 };
 
 export type SignalAccountConfig = {
@@ -120,9 +178,12 @@ export type SignalAccountConfig = {
   tcpPort?: number;
   cliPath?: string;
   autoStart?: boolean;
+  execApprovals?: SignalExecApprovalConfig;
   startupTimeoutMs?: number;
   sseIdleTimeoutMs?: number;
   retry?: SignalRetryConfig;
+  reconnect?: SignalReconnectPolicyConfig;
+  supervision?: SignalGatewaySupervisionConfig;
   receiveMode?: "on-start" | "manual";
   ignoreAttachments?: boolean;
   ignoreStories?: boolean;
@@ -140,6 +201,8 @@ export type SignalAccountConfig = {
   groups?: Record<string, SignalGroupConfig>;
   textChunkLimit?: number;
   chunkMode?: "length" | "newline";
+  directoryRefreshTtlMs?: number;
+  streaming?: SignalStreamingMode;
   blockStreaming?: boolean;
   blockStreamingCoalesce?: unknown;
   heartbeat?: {
@@ -153,6 +216,7 @@ export type SignalAccountConfig = {
   reactionNotifications?: SignalReactionNotificationMode;
   reactionAllowlist?: Array<string | number>;
   actions?: SignalActionConfig;
+  replyToMode?: ReplyToMode;
   reactionLevel?: SignalReactionLevel;
 };
 
@@ -171,6 +235,32 @@ export type ResolvedSignalAccount = {
   configured: boolean;
   config: SignalAccountConfig;
 };
+
+function mergeSignalGroupConfigs(
+  baseGroups?: Record<string, SignalGroupConfig>,
+  accountGroups?: Record<string, SignalGroupConfig>,
+): Record<string, SignalGroupConfig> | undefined {
+  if (!baseGroups && !accountGroups) {
+    return undefined;
+  }
+  const merged: Record<string, SignalGroupConfig> = {};
+  for (const [groupId, config] of Object.entries(baseGroups ?? {})) {
+    if (!config) {
+      continue;
+    }
+    merged[groupId] = { ...config };
+  }
+  for (const [groupId, config] of Object.entries(accountGroups ?? {})) {
+    if (!config) {
+      continue;
+    }
+    merged[groupId] = {
+      ...(merged[groupId] ?? {}),
+      ...config,
+    };
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
 
 function normalizeAllowFrom(values?: Array<string | number>): string[] {
   return (values ?? []).map((entry) => String(entry).trim()).filter(Boolean);
@@ -237,9 +327,12 @@ export const SignalAccountSchemaBase = z
     tcpPort: z.number().int().positive().optional(),
     cliPath: z.string().optional(),
     autoStart: z.boolean().optional(),
+    execApprovals: SignalExecApprovalSchema,
     startupTimeoutMs: z.number().int().min(1000).max(120000).optional(),
     sseIdleTimeoutMs: z.number().int().min(0).optional(),
     retry: RetryConfigSchema,
+    reconnect: ReconnectPolicySchema,
+    supervision: GatewaySupervisionSchema,
     receiveMode: z.union([z.literal("on-start"), z.literal("manual")]).optional(),
     ignoreAttachments: z.boolean().optional(),
     ignoreStories: z.boolean().optional(),
@@ -257,6 +350,8 @@ export const SignalAccountSchemaBase = z
     groups: z.record(z.string(), SignalGroupSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
+    directoryRefreshTtlMs: z.number().int().min(0).optional(),
+    streaming: z.enum(["off", "block", "draft"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: z.unknown().optional(),
     mediaMaxMb: z.number().int().positive().optional(),
@@ -264,6 +359,7 @@ export const SignalAccountSchemaBase = z
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
     reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
     actions: SignalActionsSchema,
+    replyToMode: z.enum(["off", "first", "all"]).optional(),
     reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     responsePrefix: z.string().optional(),
@@ -383,11 +479,29 @@ export function resolveSignalMarkdownTableMode(params: {
   return "bullets";
 }
 
+export function resolveSignalStreamingMode(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): SignalStreamingMode {
+  const account = resolveSignalAccount(params);
+  if (account.config.streaming) {
+    return account.config.streaming;
+  }
+  if (typeof account.config.blockStreaming === "boolean") {
+    return account.config.blockStreaming ? "block" : "off";
+  }
+  return "block";
+}
+
 function mergeSignalAccountConfig(cfg: OpenClawConfig, accountId: string): SignalAccountConfig {
   const channel = getSignalConfig(cfg) ?? {};
   const { accounts: _ignored, ...base } = channel;
   const account = resolveAccountEntry(channel.accounts, accountId) ?? {};
-  return { ...base, ...account };
+  return {
+    ...base,
+    ...account,
+    groups: mergeSignalGroupConfigs(base.groups, account.groups),
+  };
 }
 
 export function resolveSignalAccount(params: {

@@ -12,7 +12,9 @@ import {
   resolveAckReaction,
   resolveControlCommandGate,
   resolveMentionGatingWithBypass,
+  resolveSendableOutboundReplyParts,
   shouldAckReaction,
+  type ReplyPayload,
 } from "../../runtime-api.js";
 import { SIGNAL_CHANNEL_ID } from "../../constants.js";
 import { getSignalRuntime } from "../../runtime.js";
@@ -29,10 +31,11 @@ import {
   resolveSignalSender,
   type SignalSender,
 } from "../identity.js";
-import { resolveSignalAccount } from "../../config.js";
+import { resolveSignalAccount, resolveSignalMarkdownTableMode } from "../../config.js";
 import { recordSignalReactionTarget } from "../reaction-target-cache.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import { removeReactionSignal, sendReactionSignal } from "../send-reactions.js";
+import { editMessageSignal } from "../send-actions.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
 import type {
   SignalAttachment,
@@ -46,6 +49,13 @@ import type {
   SignalTextStyleRange,
 } from "./event-handler.types.js";
 import { renderSignalMentions } from "./mentions.js";
+import { resolveSignalGroupRuntimeConfig } from "../group-config.js";
+import { createRecentSignalInboundDeduper } from "../recent-inbound-dedupe.js";
+import {
+  markdownToSignalRichChunks,
+  type SignalTextStyleRange as FormattedSignalTextStyleRange,
+} from "../format.js";
+import { createSignalDraftStream } from "../draft-stream.js";
 
 function resolvePinnedMainDmOwnerFromAllowlist(params: {
   dmScope?: string | null;
@@ -122,6 +132,58 @@ function normalizeSenderNameValue(value?: string | null): string | undefined {
   }
   const normalized = value.trim();
   return normalized || undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function resolveSignalDraftFinalChunk(params: {
+  payload: ReplyPayload;
+  cfg: SignalEventHandlerDeps["cfg"];
+  accountId: string;
+  textLimit: number;
+}):
+  | {
+      text: string;
+      styles: FormattedSignalTextStyleRange[];
+      mentions?: Array<{ start: number; length: number; recipient: string }>;
+    }
+  | undefined {
+  if (params.payload.isError) {
+    return undefined;
+  }
+  const text = typeof params.payload.text === "string" ? params.payload.text : "";
+  if (!text.trim()) {
+    return undefined;
+  }
+  if (typeof params.payload.replyToId === "string" && params.payload.replyToId.trim()) {
+    return undefined;
+  }
+  const parts = resolveSendableOutboundReplyParts(params.payload, { text });
+  if (parts.hasMedia) {
+    return undefined;
+  }
+  if (isRecord(params.payload.channelData)) {
+    const signalData = params.payload.channelData[SIGNAL_CHANNEL_ID] ?? params.payload.channelData.signal;
+    if (isRecord(signalData) && Object.keys(signalData).length > 0) {
+      return undefined;
+    }
+  }
+  const chunks = markdownToSignalRichChunks(text, params.textLimit, {
+    tableMode: resolveSignalMarkdownTableMode({
+      cfg: params.cfg,
+      accountId: params.accountId,
+    }),
+  });
+  if (chunks.length !== 1) {
+    return undefined;
+  }
+  const chunk = chunks[0];
+  if (!chunk?.text.trim()) {
+    return undefined;
+  }
+  return chunk;
 }
 
 function resolveSignalMediaKind(mime?: string | null): string | undefined {
@@ -465,6 +527,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       deps.runtime.log?.(message);
     }
   };
+  const recentInboundDeduper = createRecentSignalInboundDeduper();
 
   function logInboundTiming(params: {
     entry: SignalInboundEntry;
@@ -478,6 +541,35 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     logVerbose(
       `signal inbound timing: entries=${Math.max(1, params.entry.mergedEntryCount ?? 1)} preprocess_ms=${Math.max(0, params.entry.preprocessMs ?? 0)} attachments_ms=${Math.max(0, params.entry.attachmentResolveMs ?? 0)} context_ms=${params.contextBuildMs} dispatch_ms=${params.dispatchMs} total_ms=${totalMs}`,
     );
+  }
+
+  function buildSignalInboundDedupeKey(params: {
+    envelope: SignalEnvelope;
+    sender: SignalSender;
+    dataMessage?: SignalDataMessage | null;
+    groupId?: string;
+    reaction?: SignalReactionMessage | null;
+    isEditMessage?: boolean;
+    editTargetTimestamp?: number;
+  }): string | null {
+    const eventTimestamp =
+      resolveSignalEventTimestamp(params.dataMessage?.timestamp) ??
+      resolveSignalEventTimestamp(params.envelope.timestamp) ??
+      resolveSignalEventTimestamp(params.reaction?.targetSentTimestamp) ??
+      params.editTargetTimestamp ??
+      null;
+    if (!eventTimestamp) {
+      return null;
+    }
+    const senderKey =
+      params.sender.kind === "phone" ? params.sender.e164 : `uuid:${params.sender.raw}`;
+    const scope = params.groupId ? `group:${params.groupId}` : "direct";
+    const kind = params.reaction
+      ? `reaction:${params.reaction.emoji ?? ""}:${params.reaction.isRemove === true || params.reaction.remove === true ? "remove" : "add"}`
+      : params.isEditMessage
+        ? `edit:${params.editTargetTimestamp ?? eventTimestamp}`
+        : "message";
+    return `${scope}|${senderKey}|${eventTimestamp}|${kind}`;
   }
 
   function enqueueSignalSystemEvent(params: {
@@ -657,6 +749,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             timestamp: historyEntry.timestamp,
           }))
         : undefined;
+    const signalGroupRuntime = entry.isGroup
+      ? resolveSignalGroupRuntimeConfig({
+          cfg: deps.cfg,
+          groupId: entry.groupId,
+          accountId: deps.accountId,
+        })
+      : undefined;
+    const skillFilter = signalGroupRuntime?.skills;
+    const groupSystemPrompt = signalGroupRuntime?.systemPrompt?.trim() || undefined;
     const ctxPayload = pluginRuntime.channel.reply.finalizeInboundContext({
       Body: bodyForReply,
       BodyForAgent: entry.bodyText,
@@ -673,6 +774,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       ChatType: entry.isGroup ? "group" : "direct",
       ConversationLabel: fromLabel,
       GroupSubject: entry.isGroup ? (entry.groupName ?? undefined) : undefined,
+      GroupSystemPrompt: entry.isGroup ? groupSystemPrompt : undefined,
       SenderName: entry.senderName,
       SenderId: entry.senderDisplay,
       Provider: SIGNAL_CHANNEL_ID,
@@ -813,6 +915,25 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }
     }
 
+    const resolvedStreamMode =
+      deps.streamMode ??
+      (typeof deps.blockStreaming === "boolean" ? (deps.blockStreaming ? "block" : "off") : "block");
+    const draftStream =
+      resolvedStreamMode === "draft" && ctxPayload.To
+        ? createSignalDraftStream({
+            cfg: deps.cfg,
+            to: ctxPayload.To,
+            accountId: deps.accountId,
+            replyToId: entry.messageId,
+            maxChars: Math.min(deps.textLimit, 4000),
+            throttleMs: 1200,
+            minInitialChars: 30,
+            log: logVerbose,
+            warn: logVerbose,
+          })
+        : undefined;
+    let finalizedViaDraftPreview = false;
+
     const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
       cfg: deps.cfg,
       agentId: route.agentId,
@@ -867,7 +988,39 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         dispatcherOptions: {
           ...replyPipeline,
           humanDelay: pluginRuntime.channel.reply.resolveHumanDelayConfig(deps.cfg, route.agentId),
-          deliver: async (payload) => {
+          deliver: async (payload, info) => {
+            if (draftStream && info?.kind === "final") {
+              await draftStream.flush();
+              const previewMessageId = draftStream.messageId();
+              const finalChunk =
+                typeof previewMessageId === "string"
+                  ? resolveSignalDraftFinalChunk({
+                      payload,
+                      cfg: deps.cfg,
+                      accountId: deps.accountId,
+                      textLimit: deps.textLimit,
+                    })
+                  : undefined;
+              if (previewMessageId && finalChunk) {
+                try {
+                  await editMessageSignal({
+                    cfg: deps.cfg,
+                    to: ctxPayload.To,
+                    text: finalChunk.text,
+                    textMode: "plain",
+                    textStyles: finalChunk.styles,
+                    mentions: finalChunk.mentions,
+                    editTimestamp: Number(previewMessageId),
+                    opts: { accountId: deps.accountId },
+                  });
+                  finalizedViaDraftPreview = true;
+                  return;
+                } catch (err) {
+                  logVerbose(`signal draft preview final edit failed, falling back: ${String(err)}`);
+                }
+              }
+              await draftStream.clear();
+            }
             await deps.deliverReplies({
               replies: [payload],
               target: ctxPayload.To,
@@ -887,14 +1040,22 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           },
         },
         replyOptions: {
+          skillFilter,
           disableBlockStreaming:
-            typeof deps.blockStreaming === "boolean" ? !deps.blockStreaming : undefined,
+            draftStream ? true : resolvedStreamMode === "off" ? true : undefined,
           onModelSelected,
-          onPartialReply: statusReactionController
-            ? async () => {
-                await Promise.resolve(statusReactionController.setThinking());
-              }
-            : undefined,
+          onPartialReply:
+            draftStream || statusReactionController
+              ? async (payload: { text?: string }) => {
+                  if (draftStream && payload.text) {
+                    draftStream.update(payload.text);
+                  }
+                  if (!statusReactionController) {
+                    return;
+                  }
+                  await Promise.resolve(statusReactionController.setThinking());
+                }
+              : undefined,
           onToolStart: statusReactionController
             ? async ({ name }: { name?: string }) => {
                 await Promise.resolve(statusReactionController.setTool(name));
@@ -914,6 +1075,17 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         },
       });
     const dispatchMs = Math.max(0, Date.now() - dispatchStartedAt);
+
+    if (draftStream) {
+      try {
+        await draftStream.stop();
+        if (!finalizedViaDraftPreview) {
+          await draftStream.clear();
+        }
+      } catch (err) {
+        logVerbose(`signal draft preview cleanup failed: ${String(err)}`);
+      }
+    }
 
     if (statusReactionController) {
       if (!queuedFinal) {
@@ -1360,6 +1532,19 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       : deps.isSignalReactionMessage(dataMessage?.reaction)
         ? dataMessage?.reaction
         : null;
+    const dedupeKey = buildSignalInboundDedupeKey({
+      envelope,
+      sender,
+      dataMessage,
+      groupId: maybeGroupId,
+      reaction,
+      isEditMessage,
+      editTargetTimestamp,
+    });
+    if (dedupeKey && recentInboundDeduper.recordAndCheckDuplicate(dedupeKey)) {
+      logVerbose(`Signal duplicate inbound dropped: ${dedupeKey}`);
+      return;
+    }
 
     const senderDisplay = formatSignalSenderDisplay(sender);
     const senderName =
@@ -1651,18 +1836,17 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const groupId = dataMessage.groupInfo?.groupId ?? undefined;
     const groupName = dataMessage.groupInfo?.groupName ?? undefined;
     const isGroup = Boolean(groupId);
-    const channelGroupPolicy = isGroup
-      ? pluginRuntime.channel.groups.resolveGroupPolicy({
+    const signalGroupRuntime = isGroup
+      ? resolveSignalGroupRuntimeConfig({
           cfg: deps.cfg,
-          channel: SIGNAL_CHANNEL_ID,
           groupId,
           accountId: deps.accountId,
-          hasGroupAllowFrom: deps.groupAllowFrom.length > 0,
         })
       : undefined;
-    const groupExplicitlyAllowed = Boolean(
-      channelGroupPolicy?.allowed && (channelGroupPolicy.groupConfig || channelGroupPolicy.defaultConfig),
-    );
+    if (isGroup && signalGroupRuntime?.enabled === false) {
+      logVerbose(`Blocked signal group ${groupId} (groups.${groupId}.enabled=false)`);
+      return;
+    }
 
     const isTimerUpdate =
       !messageText &&
@@ -1701,7 +1885,24 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }
     }
     if (isGroup) {
-      if (!channelGroupPolicy?.allowed) {
+      const groupAllowFromOverrideConfigured = signalGroupRuntime?.allowFromConfigured === true;
+      const effectiveGroupAllowFrom = groupAllowFromOverrideConfigured
+        ? (signalGroupRuntime?.allowFrom ?? []).map((entry) => String(entry).trim()).filter(Boolean)
+        : deps.groupAllowFrom;
+
+      if (deps.groupPolicy === "disabled") {
+        logVerbose("Blocked signal group message (groupPolicy: disabled)");
+        return;
+      }
+
+      if (groupAllowFromOverrideConfigured) {
+        if (!isSignalSenderAllowed(sender, effectiveGroupAllowFrom)) {
+          logVerbose(
+            `Blocked signal group sender ${senderDisplay} (not in groups.${groupId}.allowFrom)`,
+          );
+          return;
+        }
+      } else {
         const groupAccess = resolveAccessDecision(true);
         if (groupAccess.decision !== "allow") {
           if (groupAccess.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_DISABLED) {
@@ -1713,14 +1914,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           } else {
             logVerbose(`Blocked signal group sender ${senderDisplay} (not in groupAllowFrom)`);
           }
-          return;
-        }
-      } else if (deps.groupAllowFrom.length > 0) {
-        const groupAccess = resolveAccessDecision(true);
-        if (groupAccess.decision !== "allow") {
-          logVerbose(
-            `Blocked signal group sender ${senderDisplay} (group allowed, sender not in groupAllowFrom)`,
-          );
           return;
         }
       }
@@ -1756,7 +1949,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const useAccessGroups = deps.cfg.commands?.useAccessGroups !== false;
     const commandDmAllow = isGroup ? deps.allowFrom : effectiveDmAllow;
     const ownerAllowedForCommands = isSignalSenderAllowed(sender, commandDmAllow);
-    const groupAllowedForCommands = isSignalSenderAllowed(sender, effectiveGroupAllow);
+    const groupAllowFromForCommands =
+      isGroup && signalGroupRuntime?.allowFromConfigured
+        ? (signalGroupRuntime.allowFrom ?? []).map((entry) => String(entry).trim()).filter(Boolean)
+        : effectiveGroupAllow;
+    const groupAllowedForCommands = isSignalSenderAllowed(sender, groupAllowFromForCommands);
     const hasControlCommandInMessage = pluginRuntime.channel.text.hasControlCommand(
       messageTextPlain,
       deps.cfg,
@@ -1765,8 +1962,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       useAccessGroups,
       authorizers: [
         { configured: commandDmAllow.length > 0, allowed: ownerAllowedForCommands },
-        { configured: effectiveGroupAllow.length > 0, allowed: groupAllowedForCommands },
-        { configured: groupExplicitlyAllowed, allowed: groupExplicitlyAllowed },
+        { configured: groupAllowFromForCommands.length > 0, allowed: groupAllowedForCommands },
       ],
       allowTextCommands: true,
       hasControlCommand: hasControlCommandInMessage,
@@ -1808,14 +2004,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         account: deps.account,
         accountUuid: deps.accountUuid,
       });
-    const requireMention =
-      isGroup &&
-      pluginRuntime.channel.groups.resolveRequireMention({
-        cfg: deps.cfg,
-        channel: SIGNAL_CHANNEL_ID,
-        groupId,
-        accountId: deps.accountId,
-      });
+    const requireMention = isGroup && (signalGroupRuntime?.requireMention ?? true);
     const canDetectMention = mentionRegexes.length > 0 || Boolean(deps.account || deps.accountUuid);
     const mentionGate = resolveMentionGatingWithBypass({
       isGroup,

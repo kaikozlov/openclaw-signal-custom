@@ -63,6 +63,8 @@ export type {
   ChannelGroupContext,
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
+  ChannelMessageToolDiscovery,
+  ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
 
 export {
@@ -76,6 +78,7 @@ export type {
   DmPolicy,
   GroupPolicy,
   MarkdownTableMode,
+  ReplyToMode,
 } from "openclaw/plugin-sdk/config-runtime";
 export {
   warnMissingProviderGroupPolicyFallbackOnce,
@@ -138,6 +141,7 @@ export {
   createEmptyChannelResult,
 } from "openclaw/plugin-sdk/channel-send-result";
 export { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
+export { createMessageToolButtonsSchema } from "openclaw/plugin-sdk/channel-actions";
 export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 export { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 export { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";

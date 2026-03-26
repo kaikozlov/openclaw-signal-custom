@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { SignalSocketClient } from "./socket-client.js";
+import {
+  computeSignalBackoff,
+  normalizeSignalError,
+  sleepWithSignalAbort,
+} from "./reconnect-policy.js";
 
 export type SignalRpcOptions = {
   baseUrl: string;
@@ -188,13 +193,6 @@ function isTimeoutLikeError(error: unknown): boolean {
   );
 }
 
-function normalizeError(error: unknown): Error {
-  if (error instanceof Error) {
-    return error;
-  }
-  return new Error(String(error));
-}
-
 function resolveSignalRetryConfig(retry?: SignalRetryConfig): Required<SignalRetryConfig> {
   const attempts = Math.max(
     1,
@@ -231,56 +229,6 @@ function resolveSignalRetryConfig(retry?: SignalRetryConfig): Required<SignalRet
     maxDelayMs,
     jitter,
   };
-}
-
-function computeBackoff(params: {
-  initialMs: number;
-  maxMs: number;
-  factor: number;
-  jitter: number;
-}, attempt: number): number {
-  const exponent = Math.max(0, attempt - 1);
-  const withoutJitter = Math.min(
-    params.maxMs,
-    params.initialMs * params.factor ** exponent,
-  );
-  if (params.jitter <= 0) {
-    return Math.trunc(withoutJitter);
-  }
-  const spread = withoutJitter * params.jitter;
-  const randomOffset = (Math.random() * 2 - 1) * spread;
-  return Math.max(0, Math.trunc(withoutJitter + randomOffset));
-}
-
-async function sleepWithAbort(ms: number, abortSignal?: AbortSignal): Promise<void> {
-  if (ms <= 0) {
-    return;
-  }
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      cleanup();
-      resolve();
-    }, ms);
-
-    const onAbort = () => {
-      cleanup();
-      reject(new Error("Aborted"));
-    };
-
-    const cleanup = () => {
-      clearTimeout(timer);
-      abortSignal?.removeEventListener("abort", onAbort);
-    };
-
-    if (abortSignal) {
-      if (abortSignal.aborted) {
-        cleanup();
-        reject(new Error("Aborted"));
-        return;
-      }
-      abortSignal.addEventListener("abort", onAbort, { once: true });
-    }
-  });
 }
 
 async function fetchWithTimeout(
@@ -620,7 +568,7 @@ export async function streamSignalSocketEvents(params: {
   const client = new SignalSocketClient({
     host: params.host,
     port: params.port,
-    reconnect: true,
+    reconnect: false,
     log: params.log,
     error: params.error,
     onConnect: () => {
@@ -628,7 +576,7 @@ export async function streamSignalSocketEvents(params: {
         return;
       }
       void client.request("subscribeReceive").catch((error) => {
-        rejectFatal(normalizeError(error));
+        rejectFatal(normalizeSignalError(error));
       });
     },
     onEvent: (event) => {
@@ -676,12 +624,12 @@ export async function signalRpcRequestWithRetry<T = unknown>(
     try {
       return await signalRpcRequest<T>(method, params, opts);
     } catch (error) {
-      const normalized = normalizeError(error);
+      const normalized = normalizeSignalError(error);
       const canRetry = attempt < retryConfig.attempts && isRecoverable(normalized);
       if (!canRetry) {
         throw normalized;
       }
-      const delayMs = computeBackoff(
+      const delayMs = computeSignalBackoff(
         {
           initialMs: retryConfig.minDelayMs,
           maxMs: retryConfig.maxDelayMs,
@@ -697,7 +645,7 @@ export async function signalRpcRequestWithRetry<T = unknown>(
         error: normalized,
         method,
       });
-      await sleepWithAbort(delayMs, opts.abortSignal);
+      await sleepWithSignalAbort(delayMs, opts.abortSignal);
     }
   }
   throw new Error("Signal RPC retry exhausted");

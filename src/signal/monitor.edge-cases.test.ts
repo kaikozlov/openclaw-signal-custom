@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSignalEventHandler } from "./monitor/event-handler.js";
 import { setSignalRuntime } from "../runtime.js";
 import type { SignalReactionMessage } from "./monitor/event-handler.types.js";
+import { createRecentSignalInboundDeduper } from "./recent-inbound-dedupe.js";
 
 function isReactionMessage(
   reaction: SignalReactionMessage | null | undefined,
@@ -202,9 +203,41 @@ describe("signal monitor edge cases", () => {
     vi.clearAllMocks();
   });
 
+  it("evicts expired and oldest recent inbound dedupe entries predictably", () => {
+    const deduper = createRecentSignalInboundDeduper({
+      ttlMs: 30_000,
+      maxEntries: 2,
+    });
+
+    expect(deduper.recordAndCheckDuplicate("a", 1_000)).toBe(false);
+    expect(deduper.recordAndCheckDuplicate("b", 2_000)).toBe(false);
+    expect(deduper.size()).toBe(2);
+    expect(deduper.recordAndCheckDuplicate("c", 3_000)).toBe(false);
+    expect(deduper.size()).toBe(2);
+    expect(deduper.recordAndCheckDuplicate("a", 3_500)).toBe(false);
+    expect(deduper.recordAndCheckDuplicate("stale", 40_000)).toBe(false);
+    expect(deduper.recordAndCheckDuplicate("stale", 75_500)).toBe(false);
+  });
+
   it("accepts group envelopes when syncMessage is present but null", async () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime();
-    const handler = createHandler();
+    const handler = createHandler({
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15559990000",
+            groups: {
+              g1: { requireMention: false },
+            },
+          },
+        },
+        messages: {
+          inbound: {
+            debounceMs: 0,
+          },
+        },
+      } as never,
+    });
 
     await handler({
       event: "receive",
@@ -260,7 +293,23 @@ describe("signal monitor edge cases", () => {
 
   it("accepts group dataMessage even when syncMessage object exists", async () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime();
-    const handler = createHandler();
+    const handler = createHandler({
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15559990000",
+            groups: {
+              "g-sync": { requireMention: false },
+            },
+          },
+        },
+        messages: {
+          inbound: {
+            debounceMs: 0,
+          },
+        },
+      } as never,
+    });
 
     await handler({
       event: "receive",
@@ -467,13 +516,25 @@ describe("signal monitor edge cases", () => {
   it("authorizes control commands from explicitly allowed groups", async () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
       hasControlCommand: true,
-      resolveGroupPolicy: () => ({
-        allowed: true,
-        groupConfig: { allowFrom: [] },
-        defaultConfig: undefined,
-      }),
     });
     const handler = createHandler({
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15559990000",
+            groups: {
+              "g-ops": {
+                allowFrom: ["+15550001111"],
+              },
+            },
+          },
+        },
+        messages: {
+          inbound: {
+            debounceMs: 0,
+          },
+        },
+      } as never,
       allowFrom: [],
       groupAllowFrom: [],
     });

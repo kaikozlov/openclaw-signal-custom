@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/signal-custom",
-  "version": "2026.3.24",
+  "version": "2026.3.25",
   "private": true,
   "description": "OpenClaw Signal custom channel plugin (fork baseline)",
   "type": "module",
@@ -11,6 +11,7 @@
     "check": "tsc --noEmit && vitest run"
   },
   "dependencies": {
+    "@sinclair/typebox": "0.34.48",
     "markdown-it": "14.1.1",
     "zod": "^4.3.6"
   },

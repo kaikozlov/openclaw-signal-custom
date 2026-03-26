@@ -31,29 +31,48 @@ import { SIGNAL_CHANNEL_ID, SIGNAL_META } from "./constants.js";
 import { monitorSignalProvider } from "./signal/monitor.js";
 import { probeSignal, type SignalProbe } from "./signal/probe.js";
 import { listSignalContacts, type SignalContact } from "./signal/directory.js";
-import { inspectSignalAccount } from "./signal/account-inspect.js";
+import { resolveSignalAllowlistGroupOverrides } from "./signal/group-config.js";
+import {
+  inspectSignalAccount,
+  resolveSignalAttachmentFastPathLikely,
+  resolveSignalConnectionMode,
+  resolveSignalDirectoryRefreshTtlMs,
+  resolveSignalEffectiveAutoStart,
+  resolveSignalReconnectMaxAttempts,
+  resolveSignalSupervisionDrainGraceMs,
+  resolveSignalSupervisionMaxRestarts,
+  resolveSignalTransportSummary,
+} from "./signal/account-inspect.js";
+import { normalizeSignalAllowlistEntry } from "./signal/allowlist.js";
 import { signalCustomSetupWizard } from "./setup-wizard.js";
 
+function readRuntimeExtraBool(
+  runtime: Record<string, unknown> | undefined,
+  key: string,
+  fallback: boolean,
+): boolean {
+  return typeof runtime?.[key] === "boolean" ? (runtime[key] as boolean) : fallback;
+}
+
+function readRuntimeExtraNumber(
+  runtime: Record<string, unknown> | undefined,
+  key: string,
+  fallback: number | null,
+): number | null {
+  return typeof runtime?.[key] === "number" && Number.isFinite(runtime[key])
+    ? (runtime[key] as number)
+    : fallback;
+}
+
+function readRuntimeExtraUnknown(
+  runtime: Record<string, unknown> | undefined,
+  key: string,
+): unknown {
+  return runtime?.[key];
+}
+
 function normalizeSignalAllowlistLookupKey(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return "";
-  }
-  const withoutPrefix = trimmed.replace(/^signal(-custom)?:/i, "").trim();
-  if (!withoutPrefix) {
-    return "";
-  }
-  if (withoutPrefix === "*") {
-    return "*";
-  }
-  if (withoutPrefix.toLowerCase().startsWith("uuid:")) {
-    const uuid = withoutPrefix.slice("uuid:".length).trim().toLowerCase();
-    return uuid ? `uuid:${uuid}` : "";
-  }
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(withoutPrefix)) {
-    return `uuid:${withoutPrefix.toLowerCase()}`;
-  }
-  return normalizeE164(withoutPrefix);
+  return normalizeSignalAllowlistEntry(raw);
 }
 
 function buildSignalAllowlistContactNameMap(contacts: SignalContact[]): Map<string, string> {
@@ -134,7 +153,7 @@ export const signalCustomConfigAdapter = createScopedChannelConfigAdapter<Resolv
     allowFrom
       .map((entry) => String(entry).trim())
       .filter(Boolean)
-      .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal(-custom)?:/i, ""))))
+      .map((entry) => normalizeSignalAllowlistEntry(entry))
       .filter(Boolean),
   resolveDefaultTo: (account) => account.config.defaultTo,
   allowTopLevel: true,
@@ -152,6 +171,8 @@ export const signalCustomAllowlistAdapter: NonNullable<
     resolveGroupAllowFrom: (account: ResolvedSignalAccount) => account.config.groupAllowFrom,
     resolveDmPolicy: (account: ResolvedSignalAccount) => account.config.dmPolicy,
     resolveGroupPolicy: (account: ResolvedSignalAccount) => account.config.groupPolicy,
+    resolveGroupOverrides: (account: ResolvedSignalAccount) =>
+      resolveSignalAllowlistGroupOverrides(account.config.groups),
   }),
   resolveNames: async ({ cfg, accountId, entries }) =>
     await resolveSignalAllowlistNames({ cfg, accountId, entries }),
@@ -230,26 +251,76 @@ export const signalCustomStatusAdapter = createComputedAccountStatusAdapter<
   ResolvedSignalAccount,
   SignalProbe
 >({
-  defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+  defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, {
+    connected: false,
+    restartPending: false,
+    reconnectAttempts: 0,
+    lastConnectedAt: null,
+    lastDisconnect: null,
+    healthState: "stopped",
+    supervisorState: "stopped",
+    receiveTransport: null,
+    supervisionRestarts: 0,
+    managedDaemon: null,
+    connectionMode: null,
+  }),
   collectStatusIssues: (accounts) => collectStatusIssuesFromLastError(SIGNAL_CHANNEL_ID, accounts),
   buildChannelSummary: ({ snapshot }) => ({
     ...buildBaseChannelStatusSummary(snapshot),
     baseUrl: snapshot.baseUrl ?? null,
+    connected: snapshot.connected ?? false,
+    restartPending: snapshot.restartPending ?? false,
+    reconnectAttempts: snapshot.reconnectAttempts ?? 0,
+    healthState: snapshot.healthState ?? null,
     probe: snapshot.probe,
     lastProbeAt: snapshot.lastProbeAt ?? null,
   }),
   probeAccount: async ({ account, timeoutMs }) => await probeSignal(account.baseUrl, timeoutMs),
   formatCapabilitiesProbe: ({ probe }) =>
-    probe?.version ? [{ text: `Signal daemon: ${probe.version}` }] : [],
-  resolveAccountSnapshot: ({ account }) => ({
-    accountId: account.accountId,
-    name: account.name,
-    enabled: account.enabled,
-    configured: account.configured,
-    extra: {
-      baseUrl: account.baseUrl,
-    },
-  }),
+    probe?.version
+      ? [{ text: `Signal daemon: ${probe.version}` }]
+      : probe?.error
+        ? [{ text: `Signal probe error: ${probe.error}` }]
+        : [],
+  resolveAccountSnapshot: ({ account, runtime }) => {
+    const runtimeExtra = runtime as Record<string, unknown> | undefined;
+    return {
+      accountId: account.accountId,
+      name: account.name,
+      enabled: account.enabled,
+      configured: account.configured,
+      extra: {
+        baseUrl: account.baseUrl,
+        connectionMode: resolveSignalConnectionMode(account.config),
+        transportSummary: resolveSignalTransportSummary(account.config),
+        effectiveAutoStart: resolveSignalEffectiveAutoStart(account.config),
+        configPathSet: Boolean(account.config.configPath?.trim()),
+        attachmentFastPathLikely: resolveSignalAttachmentFastPathLikely(account.config),
+        receiveMode: account.config.receiveMode ?? "on-start",
+        directoryRefreshTtlMs: resolveSignalDirectoryRefreshTtlMs(account.config),
+        reconnectMaxAttempts: resolveSignalReconnectMaxAttempts(account.config),
+        supervisionMaxRestarts: resolveSignalSupervisionMaxRestarts(account.config),
+        supervisionDrainGraceMs: resolveSignalSupervisionDrainGraceMs(account.config),
+        connected: runtime?.connected ?? false,
+        restartPending: runtime?.restartPending ?? false,
+        reconnectAttempts: runtime?.reconnectAttempts ?? 0,
+        lastConnectedAt: runtime?.lastConnectedAt ?? null,
+        lastDisconnect: runtime?.lastDisconnect ?? null,
+        healthState: runtime?.healthState ?? "stopped",
+        supervisorState:
+          (readRuntimeExtraUnknown(runtimeExtra, "supervisorState") as string | undefined) ??
+          "stopped",
+        receiveTransport: readRuntimeExtraUnknown(runtimeExtra, "receiveTransport") ?? null,
+        supervisionRestarts:
+          readRuntimeExtraNumber(runtimeExtra, "supervisionRestarts", 0) ?? 0,
+        managedDaemon: readRuntimeExtraBool(
+          runtimeExtra,
+          "managedDaemon",
+          resolveSignalEffectiveAutoStart(account.config),
+        ),
+      },
+    };
+  },
 });
 
 export const signalCustomGatewayAdapter: NonNullable<
@@ -260,6 +331,7 @@ export const signalCustomGatewayAdapter: NonNullable<
     ctx.setStatus({
       accountId: account.accountId,
       baseUrl: account.baseUrl,
+      healthState: "starting",
     });
     ctx.log?.info(`[${account.accountId}] starting provider (${account.baseUrl})`);
     return monitorSignalProvider({
@@ -268,6 +340,8 @@ export const signalCustomGatewayAdapter: NonNullable<
       runtime: ctx.runtime,
       abortSignal: ctx.abortSignal,
       mediaMaxMb: account.config.mediaMaxMb,
+      setStatus: (patch) =>
+        ctx.setStatus({ accountId: account.accountId, ...(patch as Record<string, unknown>) } as never),
     });
   },
 };
@@ -287,7 +361,7 @@ export const signalCustomSecurityAdapter: NonNullable<
       policyPath: `${basePath}dmPolicy`,
       allowFromPath: basePath,
       approveHint: formatPairingApproveHint(SIGNAL_CHANNEL_ID),
-      normalizeEntry: (raw) => normalizeE164(raw.replace(/^signal(-custom)?:/i, "").trim()),
+      normalizeEntry: (raw) => normalizeSignalAllowlistEntry(raw),
     };
   },
   collectWarnings: ({ account, cfg }) => {
@@ -310,6 +384,7 @@ export function createSignalCustomPluginBase(): Pick<
   ChannelPlugin<ResolvedSignalAccount, SignalProbe>,
   | "id"
   | "meta"
+  | "agentPrompt"
   | "setupWizard"
   | "capabilities"
   | "streaming"
@@ -327,6 +402,14 @@ export function createSignalCustomPluginBase(): Pick<
       id: SIGNAL_CHANNEL_ID,
       meta: SIGNAL_META,
       setupWizard: signalCustomSetupWizard,
+      agentPrompt: {
+        messageToolHints: () => [
+          "- Signal supports message edits, reactions, stickers, polls, mentions, view-once media, and story replies.",
+          "- For Signal view-once media, set `channelData.signal.viewOnce=true` on the reply payload.",
+          "- For Signal story replies, set `channelData.signal.storyReply={ storyTimestamp, storyAuthor }` on the reply payload.",
+          "- For deterministic Signal mentions, include `channelData.signal.mentions` ranges instead of relying only on plain text.",
+        ],
+      },
       capabilities: {
         chatTypes: ["direct", "group"],
         polls: true,

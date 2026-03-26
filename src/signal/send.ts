@@ -69,7 +69,7 @@ function parseTarget(raw: string): SignalTarget {
     };
   }
   if (normalized.startsWith("u:")) {
-    return { type: "username", username: value.trim() };
+    return { type: "username", username: value.slice("u:".length).trim() };
   }
   return { type: "recipient", recipient: value };
 }
@@ -126,7 +126,7 @@ function normalizeSignalMentionRecipient(raw: string, index: number): string {
   return trimmed;
 }
 
-function buildSignalMentionParams(mentions?: SignalMentionRange[]): string[] {
+export function buildSignalMentionParams(mentions?: SignalMentionRange[]): string[] {
   if (!mentions?.length) {
     return [];
   }

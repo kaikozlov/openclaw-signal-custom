@@ -63,6 +63,7 @@ describe("signal plugin shell modernization", () => {
       dmAllowFrom: ["signal:+15550001111"],
       groupPolicy: "allowlist",
       groupAllowFrom: ["+15550002222"],
+      groupOverrides: [],
     });
   });
 
@@ -82,12 +83,22 @@ describe("signal plugin shell modernization", () => {
       runtime: {
         accountId: "work",
         running: true,
+        connected: true,
+        restartPending: false,
+        reconnectAttempts: 0,
+        lastConnectedAt: 9,
+        lastDisconnect: null,
+        healthState: "healthy",
+        supervisorState: "running",
+        receiveTransport: "sse",
+        supervisionRestarts: 0,
+        managedDaemon: true,
         lastStartAt: 10,
         lastStopAt: null,
         lastError: null,
         lastInboundAt: 11,
         lastOutboundAt: 12,
-      },
+      } as never,
       probe: { ok: true, elapsedMs: 1, version: "1.0.0" },
     });
 
@@ -95,8 +106,10 @@ describe("signal plugin shell modernization", () => {
       expect.objectContaining({
         accountId: "work",
         running: true,
+        connected: true,
         lastInboundAt: 11,
         lastOutboundAt: 12,
+        healthState: "healthy",
       }),
     );
 
@@ -108,6 +121,10 @@ describe("signal plugin shell modernization", () => {
         accountId: "work",
         configured: true,
         running: false,
+        connected: false,
+        restartPending: false,
+        reconnectAttempts: 0,
+        healthState: "stopped",
         lastStartAt: 1,
         lastStopAt: 2,
         lastError: null,
@@ -122,6 +139,8 @@ describe("signal plugin shell modernization", () => {
         configured: true,
         running: false,
         baseUrl: "http://signal.local",
+        connected: false,
+        healthState: "stopped",
         lastProbeAt: 20,
       }),
     );
@@ -166,12 +185,14 @@ describe("signal plugin shell modernization", () => {
     expect(setStatus).toHaveBeenCalledWith({
       accountId: "work",
       baseUrl: "http://signal.local",
+      healthState: "starting",
     });
     expect(logInfo).toHaveBeenCalledWith(`[work] starting provider (http://signal.local)`);
     expect(monitorSignalProviderMock).toHaveBeenCalledWith(
       expect.objectContaining({
         accountId: "work",
         mediaMaxMb: 16,
+        setStatus: expect.any(Function),
       }),
     );
     expect(typeof result).toBe("symbol");

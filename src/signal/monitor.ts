@@ -7,12 +7,14 @@ import {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
   type HistoryEntry,
+  type DmPolicy,
+  type GroupPolicy,
   type OpenClawConfig,
   type ReplyPayload,
   type RuntimeEnv,
 } from "../runtime-api.js";
 import type { SignalReactionNotificationMode } from "../config.js";
-import { resolveSignalAccount } from "../config.js";
+import { resolveSignalAccount, resolveSignalStreamingMode } from "../config.js";
 import { SIGNAL_CHANNEL_ID } from "../constants.js";
 import { getSignalRuntime } from "../runtime.js";
 import {
@@ -21,6 +23,10 @@ import {
   type SignalSender,
 } from "./identity.js";
 import { createSignalDisplayNameResolver } from "./display-names.js";
+import {
+  resolveSignalConnectionMode,
+  resolveSignalDirectoryRefreshTtlMs,
+} from "./account-inspect.js";
 import {
   detectSignalApiMode,
   pollSignalJsonRpc,
@@ -31,20 +37,28 @@ import {
   type SignalSseEvent,
 } from "./client.js";
 import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
+import {
+  createSignalGatewaySupervisor,
+  type SignalReceiveTransport,
+} from "./gateway-supervisor.js";
 import { createSignalEventHandler } from "./monitor/event-handler.js";
 import type {
   SignalAttachment,
   SignalReactionMessage,
   SignalReactionTarget,
 } from "./monitor/event-handler.types.js";
+import {
+  SignalReconnectExhaustedError,
+  buildSignalReconnectLogLine,
+  computeSignalBackoff,
+  isAbortLikeSignalError,
+  normalizeSignalError,
+  resolveSignalReconnectPolicy,
+  sleepWithSignalAbort,
+  type SignalGatewaySupervisionPolicyInput,
+  type SignalReconnectPolicyInput,
+} from "./reconnect-policy.js";
 import { sendMessageSignal } from "./send.js";
-
-type BackoffPolicy = {
-  initialMs: number;
-  maxMs: number;
-  factor: number;
-  jitter: number;
-};
 
 export type MonitorSignalOpts = {
   runtime?: RuntimeEnv;
@@ -66,14 +80,9 @@ export type MonitorSignalOpts = {
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
   mediaMaxMb?: number;
-  reconnectPolicy?: Partial<BackoffPolicy>;
-};
-
-const DEFAULT_RECONNECT_POLICY: BackoffPolicy = {
-  initialMs: 1_000,
-  maxMs: 10_000,
-  factor: 2,
-  jitter: 0.2,
+  reconnectPolicy?: SignalReconnectPolicyInput;
+  supervisionPolicy?: SignalGatewaySupervisionPolicyInput;
+  setStatus?: (patch: Record<string, unknown>) => void;
 };
 
 function resolveRuntime(opts: MonitorSignalOpts): RuntimeEnv {
@@ -88,48 +97,6 @@ function resolveRuntime(opts: MonitorSignalOpts): RuntimeEnv {
 
 function resolveConfig(opts: MonitorSignalOpts): OpenClawConfig {
   return opts.config ?? getSignalRuntime().config.loadConfig();
-}
-
-function computeBackoff(params: BackoffPolicy, attempt: number): number {
-  const exponent = Math.max(0, attempt - 1);
-  const withoutJitter = Math.min(params.maxMs, params.initialMs * params.factor ** exponent);
-  if (params.jitter <= 0) {
-    return Math.trunc(withoutJitter);
-  }
-  const spread = withoutJitter * params.jitter;
-  const randomOffset = (Math.random() * 2 - 1) * spread;
-  return Math.max(0, Math.trunc(withoutJitter + randomOffset));
-}
-
-async function sleepWithAbort(ms: number, abortSignal?: AbortSignal): Promise<void> {
-  if (ms <= 0) {
-    return;
-  }
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      cleanup();
-      resolve();
-    }, ms);
-
-    const onAbort = () => {
-      cleanup();
-      reject(new Error("Aborted"));
-    };
-
-    const cleanup = () => {
-      clearTimeout(timer);
-      abortSignal?.removeEventListener("abort", onAbort);
-    };
-
-    if (abortSignal) {
-      if (abortSignal.aborted) {
-        cleanup();
-        reject(new Error("Aborted"));
-        return;
-      }
-      abortSignal.addEventListener("abort", onAbort, { once: true });
-    }
-  });
 }
 
 function mergeAbortSignals(
@@ -398,7 +365,7 @@ async function waitForSignalDaemonReady(params: {
     }
 
     try {
-      await sleepWithAbort(150, params.abortSignal);
+      await sleepWithSignalAbort(150, params.abortSignal);
     } catch (err) {
       if (params.abortSignal?.aborted) {
         return;
@@ -576,18 +543,48 @@ async function deliverReplies(params: {
   }
 }
 
+async function waitForSignalReconnect(params: {
+  scope: string;
+  error: unknown;
+  attempt: number;
+  abortSignal?: AbortSignal;
+  runtime: RuntimeEnv;
+  policy?: SignalReconnectPolicyInput;
+}): Promise<void> {
+  const reconnectPolicy = resolveSignalReconnectPolicy(params.policy);
+  const normalized = normalizeSignalError(params.error);
+  if (isAbortLikeSignalError(normalized)) {
+    throw normalized;
+  }
+  if (params.attempt >= reconnectPolicy.maxAttempts) {
+    throw new SignalReconnectExhaustedError({
+      scope: params.scope,
+      attempt: params.attempt,
+      maxAttempts: reconnectPolicy.maxAttempts,
+      error: normalized,
+    });
+  }
+  const delayMs = computeSignalBackoff(reconnectPolicy, params.attempt);
+  params.runtime.log?.(
+    buildSignalReconnectLogLine({
+      scope: params.scope,
+      attempt: params.attempt,
+      maxAttempts: reconnectPolicy.maxAttempts,
+      delayMs,
+      error: normalized,
+    }),
+  );
+  await sleepWithSignalAbort(delayMs, params.abortSignal);
+}
+
 async function runSignalSseLoop(params: {
   baseUrl: string;
   account?: string;
   abortSignal?: AbortSignal;
   runtime: RuntimeEnv;
   onEvent: (event: SignalSseEvent) => void;
-  policy?: Partial<BackoffPolicy>;
+  policy?: SignalReconnectPolicyInput;
 }) {
-  const reconnectPolicy = {
-    ...DEFAULT_RECONNECT_POLICY,
-    ...params.policy,
-  };
   let reconnectAttempts = 0;
 
   while (!params.abortSignal?.aborted) {
@@ -605,21 +602,31 @@ async function runSignalSseLoop(params: {
         return;
       }
       reconnectAttempts += 1;
-      const delayMs = computeBackoff(reconnectPolicy, reconnectAttempts);
       if (getSignalRuntime().logging.shouldLogVerbose()) {
-        params.runtime.log?.(`Signal SSE stream ended, reconnecting in ${delayMs / 1000}s...`);
+        params.runtime.log?.(`Signal SSE stream ended unexpectedly`);
       }
-      await sleepWithAbort(delayMs, params.abortSignal);
+      await waitForSignalReconnect({
+        scope: "Signal SSE stream",
+        error: new Error("Signal SSE stream ended"),
+        attempt: reconnectAttempts,
+        abortSignal: params.abortSignal,
+        runtime: params.runtime,
+        policy: params.policy,
+      });
     } catch (err) {
       if (params.abortSignal?.aborted) {
         return;
       }
-      params.runtime.error?.(`Signal SSE stream error: ${String(err)}`);
       reconnectAttempts += 1;
-      const delayMs = computeBackoff(reconnectPolicy, reconnectAttempts);
-      params.runtime.log?.(`Signal SSE connection lost, reconnecting in ${delayMs / 1000}s...`);
       try {
-        await sleepWithAbort(delayMs, params.abortSignal);
+        await waitForSignalReconnect({
+          scope: "Signal SSE stream",
+          error: err,
+          attempt: reconnectAttempts,
+          abortSignal: params.abortSignal,
+          runtime: params.runtime,
+          policy: params.policy,
+        });
       } catch (sleepErr) {
         if (params.abortSignal?.aborted) {
           return;
@@ -636,12 +643,8 @@ async function runSignalJsonRpcPollLoop(params: {
   abortSignal?: AbortSignal;
   runtime: RuntimeEnv;
   onEvent: (event: SignalSseEvent) => void;
-  policy?: Partial<BackoffPolicy>;
+  policy?: SignalReconnectPolicyInput;
 }) {
-  const reconnectPolicy = {
-    ...DEFAULT_RECONNECT_POLICY,
-    ...params.policy,
-  };
   let consecutiveErrors = 0;
 
   while (!params.abortSignal?.aborted) {
@@ -658,12 +661,16 @@ async function runSignalJsonRpcPollLoop(params: {
       if (params.abortSignal?.aborted) {
         return;
       }
-      params.runtime.error?.(`Signal JSON-RPC poll error: ${String(err)}`);
       consecutiveErrors += 1;
-      const delayMs = computeBackoff(reconnectPolicy, consecutiveErrors);
-      params.runtime.log?.(`Signal JSON-RPC poll failed, retrying in ${delayMs / 1000}s...`);
       try {
-        await sleepWithAbort(delayMs, params.abortSignal);
+        await waitForSignalReconnect({
+          scope: "Signal JSON-RPC poll",
+          error: err,
+          attempt: consecutiveErrors,
+          abortSignal: params.abortSignal,
+          runtime: params.runtime,
+          policy: params.policy,
+        });
       } catch (sleepErr) {
         if (params.abortSignal?.aborted) {
           return;
@@ -681,12 +688,8 @@ async function runSignalSocketReceiveLoop(params: {
   runtime: RuntimeEnv;
   onEvent: (event: SignalSseEvent) => void;
   receiveMode?: "on-start" | "manual";
-  policy?: Partial<BackoffPolicy>;
+  policy?: SignalReconnectPolicyInput;
 }) {
-  const reconnectPolicy = {
-    ...DEFAULT_RECONNECT_POLICY,
-    ...params.policy,
-  };
   let consecutiveErrors = 0;
 
   while (!params.abortSignal?.aborted) {
@@ -705,12 +708,16 @@ async function runSignalSocketReceiveLoop(params: {
       if (params.abortSignal?.aborted) {
         return;
       }
-      params.runtime.error?.(`Signal socket receive error: ${String(err)}`);
       consecutiveErrors += 1;
-      const delayMs = computeBackoff(reconnectPolicy, consecutiveErrors);
-      params.runtime.log?.(`Signal socket receive failed, retrying in ${delayMs / 1000}s...`);
       try {
-        await sleepWithAbort(delayMs, params.abortSignal);
+        await waitForSignalReconnect({
+          scope: "Signal socket receive",
+          error: err,
+          attempt: consecutiveErrors,
+          abortSignal: params.abortSignal,
+          runtime: params.runtime,
+          policy: params.policy,
+        });
       } catch (sleepErr) {
         if (params.abortSignal?.aborted) {
           return;
@@ -729,14 +736,16 @@ async function runSignalReceiveLoop(params: {
   abortSignal?: AbortSignal;
   runtime: RuntimeEnv;
   onEvent: (event: SignalSseEvent) => void;
+  onConnected?: (transport: SignalReceiveTransport) => void;
   receiveMode?: "on-start" | "manual";
-  policy?: Partial<BackoffPolicy>;
-}) {
+  policy?: SignalReconnectPolicyInput;
+}): Promise<SignalReceiveTransport> {
   const tcpHost = params.tcpHost?.trim();
   const tcpPort = params.tcpPort;
   if (tcpHost && typeof tcpPort === "number" && Number.isFinite(tcpPort) && tcpPort > 0) {
     params.runtime.log?.(`Signal receive mode: jsonrpc-socket`);
-    return await runSignalSocketReceiveLoop({
+    params.onConnected?.("jsonrpc-socket");
+    await runSignalSocketReceiveLoop({
       host: tcpHost,
       port: Math.trunc(tcpPort),
       abortSignal: params.abortSignal,
@@ -745,13 +754,170 @@ async function runSignalReceiveLoop(params: {
       receiveMode: params.receiveMode,
       policy: params.policy,
     });
+    return "jsonrpc-socket";
   }
   const mode = await detectSignalApiMode(params.baseUrl);
   params.runtime.log?.(`Signal receive mode: ${mode}`);
   if (mode === "sse") {
-    return await runSignalSseLoop(params);
+    params.onConnected?.("sse");
+    await runSignalSseLoop(params);
+    return "sse";
   }
-  return await runSignalJsonRpcPollLoop(params);
+  params.onConnected?.("jsonrpc-poll");
+  await runSignalJsonRpcPollLoop(params);
+  return "jsonrpc-poll";
+}
+
+function resolvePlannedSignalReceiveTransport(params: {
+  tcpHost?: string;
+  tcpPort?: number;
+}): SignalReceiveTransport | null {
+  const tcpHost = params.tcpHost?.trim();
+  const tcpPort = params.tcpPort;
+  if (tcpHost && typeof tcpPort === "number" && Number.isFinite(tcpPort) && tcpPort > 0) {
+    return "jsonrpc-socket";
+  }
+  return null;
+}
+
+async function runSignalProviderCycle(params: {
+  opts: MonitorSignalOpts;
+  runtime: RuntimeEnv;
+  cfg: OpenClawConfig;
+  accountInfo: ReturnType<typeof resolveSignalAccount>;
+  baseUrl: string;
+  account: string;
+  historyLimit: number;
+  groupHistories: Map<string, HistoryEntry[]>;
+  textLimit: number;
+  chunkMode: "length" | "newline";
+  dmPolicy: DmPolicy;
+  allowFrom: string[];
+  groupAllowFrom: string[];
+  groupPolicy: GroupPolicy;
+  reactionMode: SignalReactionNotificationMode;
+  reactionAllowlist: string[];
+  mediaMaxBytes: number;
+  ignoreAttachments: boolean;
+  sendReadReceipts: boolean;
+  autoStart: boolean;
+  startupTimeoutMs: number;
+  configPath?: string;
+  displayNameResolver: ReturnType<typeof createSignalDisplayNameResolver>;
+  onConnectedTransport?: (transport: SignalReceiveTransport) => void;
+}): Promise<SignalReceiveTransport> {
+  const { opts, runtime, cfg, accountInfo } = params;
+  const readReceiptsViaDaemon = Boolean(params.autoStart && params.sendReadReceipts);
+  const daemonLifecycle = createSignalDaemonLifecycle({ abortSignal: opts.abortSignal });
+  let daemonHandle: SignalDaemonHandle | null = null;
+
+  if (params.autoStart) {
+    const cliPath = opts.cliPath ?? accountInfo.config.cliPath ?? "signal-cli";
+    const httpHost = opts.httpHost ?? accountInfo.config.httpHost ?? "127.0.0.1";
+    const httpPort = opts.httpPort ?? accountInfo.config.httpPort ?? 8080;
+    daemonHandle = spawnSignalDaemon({
+      cliPath,
+      ...(params.configPath ? { configPath: params.configPath } : {}),
+      account: params.account,
+      httpHost,
+      httpPort,
+      tcpHost: accountInfo.config.tcpHost,
+      tcpPort: accountInfo.config.tcpPort,
+      receiveMode: opts.receiveMode ?? accountInfo.config.receiveMode ?? "manual",
+      ignoreAttachments: opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments,
+      ignoreStories: opts.ignoreStories ?? accountInfo.config.ignoreStories,
+      sendReadReceipts: params.sendReadReceipts,
+      runtime,
+    });
+    daemonLifecycle.attach(daemonHandle);
+  }
+
+  const onAbort = () => {
+    daemonLifecycle.stop();
+  };
+  opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
+
+  try {
+    if (daemonHandle) {
+      await waitForSignalDaemonReady({
+        baseUrl: params.baseUrl,
+        abortSignal: daemonLifecycle.abortSignal,
+        timeoutMs: params.startupTimeoutMs,
+        logAfterMs: 10_000,
+        logIntervalMs: 10_000,
+        runtime,
+      });
+      const daemonExitError = daemonLifecycle.getExitError();
+      if (daemonExitError) {
+        throw daemonExitError;
+      }
+    }
+
+    const handleEvent = createSignalEventHandler({
+      runtime,
+      cfg,
+      baseUrl: params.baseUrl,
+      account: params.account,
+      accountUuid: accountInfo.config.accountUuid,
+      accountId: accountInfo.accountId,
+      streamMode: resolveSignalStreamingMode({
+        cfg,
+        accountId: accountInfo.accountId,
+      }),
+      blockStreaming: accountInfo.config.blockStreaming,
+      historyLimit: params.historyLimit,
+      groupHistories: params.groupHistories,
+      textLimit: params.textLimit,
+      dmPolicy: params.dmPolicy,
+      allowFrom: params.allowFrom,
+      groupAllowFrom: params.groupAllowFrom,
+      groupPolicy: params.groupPolicy,
+      reactionMode: params.reactionMode,
+      reactionAllowlist: params.reactionAllowlist,
+      mediaMaxBytes: params.mediaMaxBytes,
+      ignoreAttachments: params.ignoreAttachments,
+      ignoreStories: opts.ignoreStories ?? accountInfo.config.ignoreStories,
+      sendReadReceipts: params.sendReadReceipts,
+      readReceiptsViaDaemon,
+      injectLinkPreviews: accountInfo.config.injectLinkPreviews,
+      preserveTextStyles: accountInfo.config.preserveTextStyles,
+      fetchAttachment: (fetchParams) =>
+        fetchAttachment({ ...fetchParams, configPath: params.configPath }),
+      deliverReplies: (deliverParams) => deliverReplies({ cfg, ...deliverParams, chunkMode: params.chunkMode }),
+      resolveSignalReactionTargets,
+      isSignalReactionMessage,
+      shouldEmitSignalReactionNotification,
+      buildSignalReactionSystemEventText,
+      resolveMentionDisplayName: params.displayNameResolver.resolveMentionDisplayName,
+      resolveSenderDisplayName: params.displayNameResolver.resolveSenderDisplayName,
+    });
+
+    const transport = await runSignalReceiveLoop({
+      baseUrl: params.baseUrl,
+      account: params.account,
+      tcpHost: accountInfo.config.tcpHost,
+      tcpPort: accountInfo.config.tcpPort,
+      abortSignal: daemonLifecycle.abortSignal,
+      runtime,
+      onConnected: params.onConnectedTransport,
+      receiveMode: opts.receiveMode ?? accountInfo.config.receiveMode ?? "manual",
+      policy: opts.reconnectPolicy ?? accountInfo.config.reconnect,
+      onEvent: (event) => {
+        void handleEvent(event).catch((err) => {
+          runtime.error?.(`event handler failed: ${String(err)}`);
+        });
+      },
+    });
+    const daemonExitError = daemonLifecycle.getExitError();
+    if (daemonExitError) {
+      throw daemonExitError;
+    }
+    return transport;
+  } finally {
+    daemonLifecycle.dispose();
+    opts.abortSignal?.removeEventListener("abort", onAbort);
+    daemonLifecycle.stop();
+  }
 }
 
 export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promise<void> {
@@ -810,126 +976,91 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const mediaMaxBytes = (opts.mediaMaxMb ?? accountInfo.config.mediaMaxMb ?? 8) * 1024 * 1024;
   const ignoreAttachments = opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments ?? false;
   const sendReadReceipts = Boolean(opts.sendReadReceipts ?? accountInfo.config.sendReadReceipts);
-
   const autoStart = opts.autoStart ?? accountInfo.config.autoStart ?? !accountInfo.config.httpUrl;
   const startupTimeoutMs = Math.min(
     120_000,
     Math.max(1_000, opts.startupTimeoutMs ?? accountInfo.config.startupTimeoutMs ?? 30_000),
   );
-  const readReceiptsViaDaemon = Boolean(autoStart && sendReadReceipts);
-  const daemonLifecycle = createSignalDaemonLifecycle({ abortSignal: opts.abortSignal });
-  let daemonHandle: SignalDaemonHandle | null = null;
   const configPathRaw = opts.configPath ?? accountInfo.config.configPath;
   const configPath = configPathRaw?.trim() || undefined;
   const displayNameResolver = createSignalDisplayNameResolver({
     cfg,
     accountId: accountInfo.accountId,
+    refreshTtlMs: resolveSignalDirectoryRefreshTtlMs(accountInfo.config),
   });
-
-  if (autoStart) {
-    const cliPath = opts.cliPath ?? accountInfo.config.cliPath ?? "signal-cli";
-    const httpHost = opts.httpHost ?? accountInfo.config.httpHost ?? "127.0.0.1";
-    const httpPort = opts.httpPort ?? accountInfo.config.httpPort ?? 8080;
-    daemonHandle = spawnSignalDaemon({
-      cliPath,
-      ...(configPath ? { configPath } : {}),
-      account,
-      httpHost,
-      httpPort,
-      tcpHost: accountInfo.config.tcpHost,
-      tcpPort: accountInfo.config.tcpPort,
-      receiveMode: opts.receiveMode ?? accountInfo.config.receiveMode ?? "manual",
-      ignoreAttachments: opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments,
-      ignoreStories: opts.ignoreStories ?? accountInfo.config.ignoreStories,
-      sendReadReceipts,
-      runtime,
-    });
-    daemonLifecycle.attach(daemonHandle);
-  }
-
-  const onAbort = () => {
-    daemonLifecycle.stop();
-  };
-  opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
+  const plannedTransport = resolvePlannedSignalReceiveTransport({
+    tcpHost: accountInfo.config.tcpHost,
+    tcpPort: accountInfo.config.tcpPort,
+  });
+  const supervisor = createSignalGatewaySupervisor({
+    accountId: accountInfo.accountId,
+    runtime,
+    setStatus: opts.setStatus,
+    supervision: opts.supervisionPolicy ?? accountInfo.config.supervision,
+    managedDaemon: autoStart,
+    connectionMode: resolveSignalConnectionMode(accountInfo.config),
+  });
+  let restartAttempt = 0;
 
   try {
-    if (daemonHandle) {
-      await waitForSignalDaemonReady({
-        baseUrl,
-        abortSignal: daemonLifecycle.abortSignal,
-        timeoutMs: startupTimeoutMs,
-        logAfterMs: 10_000,
-        logIntervalMs: 10_000,
-        runtime,
-      });
-      const daemonExitError = daemonLifecycle.getExitError();
-      if (daemonExitError) {
-        throw daemonExitError;
+    while (!opts.abortSignal?.aborted) {
+      supervisor.markStarting(plannedTransport);
+      try {
+        const activeTransport = await runSignalProviderCycle({
+          opts,
+          runtime,
+          cfg,
+          accountInfo,
+          baseUrl,
+          account,
+          historyLimit,
+          groupHistories,
+          textLimit,
+          chunkMode,
+          dmPolicy,
+          allowFrom,
+          groupAllowFrom,
+          groupPolicy,
+          reactionMode,
+          reactionAllowlist,
+          mediaMaxBytes,
+          ignoreAttachments,
+          sendReadReceipts,
+          autoStart,
+          startupTimeoutMs,
+          configPath,
+          displayNameResolver,
+          onConnectedTransport: (transport) => {
+            restartAttempt = 0;
+            supervisor.markConnected(transport);
+          },
+        });
+        if (opts.abortSignal?.aborted) {
+          return;
+        }
+        throw new Error(`Signal receive loop returned unexpectedly (${activeTransport})`);
+      } catch (err) {
+        if (opts.abortSignal?.aborted || isAbortLikeSignalError(err)) {
+          return;
+        }
+        restartAttempt += 1;
+        const shouldContinue = await supervisor.waitBeforeRestart(err, restartAttempt);
+        if (!shouldContinue) {
+          supervisor.markFailed(err);
+          throw err;
+        }
       }
     }
-
-    const handleEvent = createSignalEventHandler({
-      runtime,
-      cfg,
-      baseUrl,
-      account,
-      accountUuid: accountInfo.config.accountUuid,
-      accountId: accountInfo.accountId,
-      blockStreaming: accountInfo.config.blockStreaming,
-      historyLimit,
-      groupHistories,
-      textLimit,
-      dmPolicy,
-      allowFrom,
-      groupAllowFrom,
-      groupPolicy,
-      reactionMode,
-      reactionAllowlist,
-      mediaMaxBytes,
-      ignoreAttachments,
-      ignoreStories: opts.ignoreStories ?? accountInfo.config.ignoreStories,
-      sendReadReceipts,
-      readReceiptsViaDaemon,
-      injectLinkPreviews: accountInfo.config.injectLinkPreviews,
-      preserveTextStyles: accountInfo.config.preserveTextStyles,
-      fetchAttachment: (params) => fetchAttachment({ ...params, configPath }),
-      deliverReplies: (params) => deliverReplies({ cfg, ...params, chunkMode }),
-      resolveSignalReactionTargets,
-      isSignalReactionMessage,
-      shouldEmitSignalReactionNotification,
-      buildSignalReactionSystemEventText,
-      resolveMentionDisplayName: displayNameResolver.resolveMentionDisplayName,
-      resolveSenderDisplayName: displayNameResolver.resolveSenderDisplayName,
-    });
-
-    await runSignalReceiveLoop({
-      baseUrl,
-      account,
-      tcpHost: accountInfo.config.tcpHost,
-      tcpPort: accountInfo.config.tcpPort,
-      abortSignal: daemonLifecycle.abortSignal,
-      runtime,
-      receiveMode: opts.receiveMode ?? accountInfo.config.receiveMode ?? "manual",
-      policy: opts.reconnectPolicy,
-      onEvent: (event) => {
-        void handleEvent(event).catch((err) => {
-          runtime.error?.(`event handler failed: ${String(err)}`);
-        });
-      },
-    });
-    const daemonExitError = daemonLifecycle.getExitError();
-    if (daemonExitError) {
-      throw daemonExitError;
-    }
   } catch (err) {
-    const daemonExitError = daemonLifecycle.getExitError();
-    if (opts.abortSignal?.aborted && !daemonExitError) {
+    if (opts.abortSignal?.aborted) {
       return;
     }
+    supervisor.markFailed(err);
     throw err;
   } finally {
-    daemonLifecycle.dispose();
-    opts.abortSignal?.removeEventListener("abort", onAbort);
-    daemonLifecycle.stop();
+    if (supervisor.phase !== "failed") {
+      await supervisor.markStopping();
+      supervisor.markStopped();
+    }
   }
 }

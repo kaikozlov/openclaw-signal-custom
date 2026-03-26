@@ -69,4 +69,89 @@ describe("signal display name resolution", () => {
     ).resolves.toBe("Casey");
     expect(listContactsSpy).toHaveBeenCalledOnce();
   });
+
+  it("refreshes cached contacts after the configured TTL and reflects renamed entries", async () => {
+    let now = 1_000;
+    const listContacts = vi
+      .fn<typeof directory.listSignalContacts>()
+      .mockResolvedValueOnce([
+        {
+          name: "Casey",
+          number: "+15550001111",
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          name: "Jordan",
+          number: "+15550001111",
+        },
+      ]);
+
+    const resolver = createSignalDisplayNameResolver({
+      cfg: {} as never,
+      accountId: "default",
+      refreshTtlMs: 50,
+      now: () => now,
+      listContacts,
+    });
+
+    await expect(
+      resolver.resolveSenderDisplayName({
+        kind: "phone",
+        raw: "+15550001111",
+        e164: "+15550001111",
+      }),
+    ).resolves.toBe("Casey");
+
+    now += 100;
+
+    await expect(
+      resolver.resolveSenderDisplayName({
+        kind: "phone",
+        raw: "+15550001111",
+        e164: "+15550001111",
+      }),
+    ).resolves.toBe("Jordan");
+    expect(listContacts).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps serving the last good cache when a refresh fails", async () => {
+    let now = 1_000;
+    const listContacts = vi
+      .fn<typeof directory.listSignalContacts>()
+      .mockResolvedValueOnce([
+        {
+          name: "Casey",
+          number: "+15550001111",
+        },
+      ])
+      .mockRejectedValueOnce(new Error("directory offline"));
+
+    const resolver = createSignalDisplayNameResolver({
+      cfg: {} as never,
+      accountId: "default",
+      refreshTtlMs: 50,
+      now: () => now,
+      listContacts,
+    });
+
+    await expect(
+      resolver.resolveSenderDisplayName({
+        kind: "phone",
+        raw: "+15550001111",
+        e164: "+15550001111",
+      }),
+    ).resolves.toBe("Casey");
+
+    now += 100;
+
+    await expect(
+      resolver.resolveSenderDisplayName({
+        kind: "phone",
+        raw: "+15550001111",
+        e164: "+15550001111",
+      }),
+    ).resolves.toBe("Casey");
+    expect(listContacts).toHaveBeenCalledTimes(2);
+  });
 });

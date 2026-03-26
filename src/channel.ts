@@ -1,3 +1,4 @@
+import { Type } from "@sinclair/typebox";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -14,6 +15,8 @@ import {
   type ChannelMessageActionAdapter,
   type ChannelMessageActionName,
   type ChannelGroupContext,
+  type ChannelMessageToolDiscovery,
+  type ChannelMessageToolSchemaContribution,
   type GroupToolPolicyBySenderConfig,
   type GroupToolPolicyConfig,
 } from "./runtime-api.js";
@@ -29,7 +32,9 @@ import {
   deleteMessageSignal,
   editMessageSignal,
   listStickerPacksSignal,
+  pinMessageSignal,
   sendStickerSignal,
+  unpinMessageSignal,
 } from "./signal/send-actions.js";
 import {
   sendMessageSignal,
@@ -40,6 +45,13 @@ import {
 } from "./signal/reaction-target-cache.js";
 import { removeReactionSignal, sendReactionSignal } from "./signal/send-reactions.js";
 import { listSignalContacts, listSignalGroups } from "./signal/directory.js";
+import { resolveSignalGroupRuntimeConfig } from "./signal/group-config.js";
+import {
+  hasSignalExecApprovalDmRoute,
+  isSignalExecApprovalTargetEnabled,
+  isSignalExecApprovalClientEnabled,
+  shouldSuppressLocalSignalExecApprovalPrompt,
+} from "./signal/exec-approvals.js";
 import {
   addGroupMemberSignal,
   addGroupAdminSignal,
@@ -66,6 +78,40 @@ type ReactionToolContext = {
   currentMessageId?: string | number;
 };
 
+function normalizeSignalBindingConversationId(conversationId: string) {
+  const normalized = normalizeSignalCustomMessagingTarget(conversationId);
+  if (normalized) {
+    return { conversationId: normalized };
+  }
+  const trimmed = conversationId.trim();
+  return trimmed ? { conversationId: trimmed } : null;
+}
+
+function matchSignalBindingConversation(params: {
+  bindingConversationId: string;
+  conversationId: string;
+  parentConversationId?: string;
+}) {
+  const binding = normalizeSignalBindingConversationId(params.bindingConversationId);
+  const incoming = normalizeSignalBindingConversationId(params.conversationId);
+  if (binding && incoming && binding.conversationId === incoming.conversationId) {
+    return { conversationId: incoming.conversationId, matchPriority: 2 };
+  }
+  if (!params.parentConversationId) {
+    return null;
+  }
+  const parent = normalizeSignalBindingConversationId(params.parentConversationId);
+  if (binding && parent && binding.conversationId === parent.conversationId) {
+    return { conversationId: parent.conversationId, matchPriority: 1 };
+  }
+  return null;
+}
+
+function isSignalChannelId(value: string | null | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "signal" || normalized === SIGNAL_CHANNEL_ID;
+}
+
 const SIGNAL_GROUP_MANAGEMENT_ACTIONS = [
   "renameGroup",
   "setGroupIcon",
@@ -82,64 +128,148 @@ const SIGNAL_GROUP_MANAGEMENT_ACTIONS = [
 ] as const;
 
 const SIGNAL_LOCAL_MESSAGE_ACTIONS = [
+  "send",
   "react",
   "edit",
   "delete",
   "unsend",
+  "pin",
+  "unpin",
   "sticker",
   "sticker-search",
   ...SIGNAL_GROUP_MANAGEMENT_ACTIONS,
 ] as const satisfies readonly ChannelMessageActionName[];
 
+const SIGNAL_MESSAGE_TOOL_SCHEMA: ChannelMessageToolSchemaContribution[] = [
+  {
+    properties: {
+      mentions: Type.Optional(
+        Type.Array(
+          Type.Object({
+            start: Type.Integer({ minimum: 0 }),
+            length: Type.Integer({ minimum: 1 }),
+            recipient: Type.String(),
+          }),
+          {
+            description:
+              "Native Signal mention ranges. Use normalized recipients like +15550001111 or uuid:123e4567-e89b-12d3-a456-426614174000.",
+          },
+        ),
+      ),
+      viewOnce: Type.Optional(
+        Type.Boolean({
+          description: "Send attached media as view-once when Signal supports it.",
+        }),
+      ),
+      quoteAuthor: Type.Optional(
+        Type.String({
+          description: "Quoted-message author for explicit reply metadata, mainly for group replies.",
+        }),
+      ),
+      storyTimestamp: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          description: "Reply to a Signal story by the story message timestamp.",
+        }),
+      ),
+      storyAuthor: Type.Optional(
+        Type.String({
+          description: "Story author recipient for Signal story replies.",
+        }),
+      ),
+    },
+    visibility: "all-configured",
+  },
+];
+
+function describeSignalMessageTool({
+  cfg,
+}: {
+  cfg: Parameters<typeof listSignalAccountIds>[0];
+}): ChannelMessageToolDiscovery | null {
+  const configuredAccounts = listSignalAccountIds(cfg)
+    .map((accountId) => resolveSignalAccount({ cfg, accountId }))
+    .filter((account) => account.enabled && account.configured);
+  if (configuredAccounts.length === 0) {
+    return null;
+  }
+  const actions = new Set<ChannelMessageActionName>(["send"]);
+  const reactionsEnabled = configuredAccounts.some((account) =>
+    createSignalActionGate(account.config.actions)("reactions"),
+  );
+  if (reactionsEnabled) {
+    actions.add("react");
+  }
+  const editEnabled = configuredAccounts.some((account) =>
+    createSignalActionGate(account.config.actions)("editMessage"),
+  );
+  if (editEnabled) {
+    actions.add("edit");
+  }
+  const deleteEnabled = configuredAccounts.some((account) =>
+    createSignalActionGate(account.config.actions)("deleteMessage"),
+  );
+  if (deleteEnabled) {
+    actions.add("delete");
+  }
+  const unsendEnabled = configuredAccounts.some((account) =>
+    createSignalActionGate(account.config.actions)("unsend"),
+  );
+  if (unsendEnabled) {
+    actions.add("unsend");
+  }
+  const pinEnabled = configuredAccounts.some((account) =>
+    createSignalActionGate(account.config.actions)("pinMessage"),
+  );
+  if (pinEnabled) {
+    actions.add("pin");
+    actions.add("unpin");
+  }
+  const stickerEnabled = configuredAccounts.some((account) =>
+    createSignalActionGate(account.config.actions)("stickers", false),
+  );
+  if (stickerEnabled) {
+    actions.add("sticker");
+    actions.add("sticker-search");
+  }
+  const groupManagementEnabled = configuredAccounts.some((account) =>
+    createSignalActionGate(account.config.actions)("groupManagement"),
+  );
+  if (groupManagementEnabled) {
+    for (const action of SIGNAL_GROUP_MANAGEMENT_ACTIONS) {
+      actions.add(action);
+    }
+  }
+  return {
+    actions: Array.from(actions),
+    capabilities: [],
+    schema: SIGNAL_MESSAGE_TOOL_SCHEMA,
+  };
+}
+
 const signalMessageActions: ChannelMessageActionAdapter = {
-  describeMessageTool: ({ cfg }: { cfg: Parameters<typeof listSignalAccountIds>[0] }) => {
-    const configuredAccounts = listSignalAccountIds(cfg)
-      .map((accountId) => resolveSignalAccount({ cfg, accountId }))
-      .filter((account) => account.enabled && account.configured);
-    if (configuredAccounts.length === 0) {
+  describeMessageTool: ({ cfg }: { cfg: Parameters<typeof listSignalAccountIds>[0] }) =>
+    describeSignalMessageTool({ cfg }),
+  extractToolSend: ({ args }) => {
+    const action = typeof args.action === "string" ? args.action.trim() : "";
+    if (action !== "sendMessage") {
       return null;
     }
-    const actions = new Set<ChannelMessageActionName>(["send"]);
-    const reactionsEnabled = configuredAccounts.some((account) =>
-      createSignalActionGate(account.config.actions)("reactions"),
-    );
-    if (reactionsEnabled) {
-      actions.add("react");
+    const rawTarget =
+      typeof args.to === "string"
+        ? args.to
+        : typeof args.recipient === "string"
+          ? args.recipient
+          : "";
+    const to = normalizeSignalCustomMessagingTarget(rawTarget) ?? rawTarget.trim();
+    if (!to) {
+      return null;
     }
-    const editEnabled = configuredAccounts.some((account) =>
-      createSignalActionGate(account.config.actions)("editMessage"),
-    );
-    if (editEnabled) {
-      actions.add("edit");
-    }
-    const deleteEnabled = configuredAccounts.some((account) =>
-      createSignalActionGate(account.config.actions)("deleteMessage"),
-    );
-    if (deleteEnabled) {
-      actions.add("delete");
-    }
-    const unsendEnabled = configuredAccounts.some((account) =>
-      createSignalActionGate(account.config.actions)("unsend"),
-    );
-    if (unsendEnabled) {
-      actions.add("unsend");
-    }
-    const stickerEnabled = configuredAccounts.some((account) =>
-      createSignalActionGate(account.config.actions)("stickers", false),
-    );
-    if (stickerEnabled) {
-      actions.add("sticker");
-      actions.add("sticker-search");
-    }
-    const groupManagementEnabled = configuredAccounts.some((account) =>
-      createSignalActionGate(account.config.actions)("groupManagement"),
-    );
-    if (groupManagementEnabled) {
-      for (const action of SIGNAL_GROUP_MANAGEMENT_ACTIONS) {
-        actions.add(action);
-      }
-    }
-    return { actions: Array.from(actions) };
+    const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
+    return {
+      to,
+      ...(accountId ? { accountId } : {}),
+    };
   },
   supportsAction: ({ action }) =>
     SIGNAL_LOCAL_MESSAGE_ACTIONS.includes(
@@ -147,6 +277,47 @@ const signalMessageActions: ChannelMessageActionAdapter = {
     ),
   handleAction: async (ctx) => {
     const action = String(ctx.action);
+    if (action === "send") {
+      const recipient = readSignalRecipientParam(ctx.params);
+      const message = readStringParam(ctx.params, "message", { allowEmpty: true }) ?? "";
+      const mediaUrls = resolveSignalSendMediaUrls(ctx.params);
+      const replyTo = readStringParam(ctx.params, "replyTo");
+      const silent = readBooleanParamLoose(ctx.params, "silent");
+      const viewOnce = readBooleanParamLoose(ctx.params, "viewOnce");
+      const quoteAuthor = readStringParam(ctx.params, "quoteAuthor");
+      const storyAuthor = readStringParam(ctx.params, "storyAuthor");
+      const storyTimestamp = readPositiveIntegerParamLoose(ctx.params, "storyTimestamp");
+      const mentions = readSignalMentionRangesParam(ctx.params, "mentions");
+      const sends = mediaUrls.length > 0 ? mediaUrls : [undefined];
+      if (!message.trim() && sends[0] === undefined && !replyTo) {
+        throw new Error("Signal send requires text, media, or replyTo.");
+      }
+      const results = [];
+      for (const [index, mediaUrl] of sends.entries()) {
+        results.push(
+          await sendMessageSignal(recipient, index === 0 ? message : "", {
+            cfg: ctx.cfg,
+            accountId: ctx.accountId ?? undefined,
+            mediaUrl,
+            mediaLocalRoots: ctx.mediaLocalRoots,
+            silent,
+            viewOnce,
+            replyTo: index === 0 ? replyTo ?? undefined : undefined,
+            quoteAuthor: index === 0 ? quoteAuthor ?? undefined : undefined,
+            storyTimestamp: index === 0 ? storyTimestamp : undefined,
+            storyAuthor: index === 0 ? storyAuthor ?? undefined : undefined,
+            mentions: index === 0 ? mentions : undefined,
+          }),
+        );
+      }
+      const lastResult = results.at(-1);
+      return jsonResult({
+        ok: true,
+        sent: true,
+        messageId: lastResult?.messageId ?? null,
+        messageIds: results.map((result) => result.messageId),
+      });
+    }
     if (action === "edit") {
       const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
       if (!createSignalActionGate(actionConfig)("editMessage")) {
@@ -193,6 +364,63 @@ const signalMessageActions: ChannelMessageActionAdapter = {
         opts: { accountId: ctx.accountId ?? undefined },
       });
       return jsonResult({ ok: true, deleted: true, messageId });
+    }
+    if (action === "pin" || action === "unpin") {
+      const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
+      if (!createSignalActionGate(actionConfig)("pinMessage")) {
+        throw new Error(`Signal ${action} is disabled via actions.pinMessage.`);
+      }
+      const recipientRaw = readSignalRecipientParam(ctx.params);
+      const target = resolveSignalReactionDestination(recipientRaw);
+      if (!target.recipient && !target.groupId) {
+        throw new Error("recipient or group required");
+      }
+      const messageId = resolveReactionMessageId({
+        args: ctx.params,
+        toolContext: ctx.toolContext,
+      });
+      const timestamp = parseSignalMessageTimestamp(String(messageId ?? ""));
+      const targetAuthor = resolveReactionTargetAuthor({
+        args: ctx.params,
+        recipientRaw,
+        messageId: String(messageId),
+      });
+      const resolvedTargetAuthor = targetAuthor.targetAuthor ?? targetAuthor.targetAuthorUuid;
+      if (!resolvedTargetAuthor) {
+        throw new Error("targetAuthor or targetAuthorUuid required for Signal pin/unpin.");
+      }
+      if (action === "pin") {
+        const pinDurationRaw =
+          readNumberParam(ctx.params, "pinDuration", { integer: true }) ??
+          readNumberParam(ctx.params, "pinDurationSeconds", { integer: true });
+        const result = await pinMessageSignal({
+          cfg: ctx.cfg,
+          to: recipientRaw,
+          targetAuthor: resolvedTargetAuthor,
+          targetTimestamp: timestamp,
+          pinDurationSeconds: typeof pinDurationRaw === "number" ? pinDurationRaw : undefined,
+          opts: { accountId: ctx.accountId ?? undefined },
+        });
+        return jsonResult({
+          ok: true,
+          pinned: true,
+          messageId,
+          timestamp: result.timestamp,
+        });
+      }
+      const result = await unpinMessageSignal({
+        cfg: ctx.cfg,
+        to: recipientRaw,
+        targetAuthor: resolvedTargetAuthor,
+        targetTimestamp: timestamp,
+        opts: { accountId: ctx.accountId ?? undefined },
+      });
+      return jsonResult({
+        ok: true,
+        unpinned: true,
+        messageId,
+        timestamp: result.timestamp,
+      });
     }
     if (action === "sticker") {
       const actionConfig = resolveSignalAccount({ cfg: ctx.cfg, accountId: ctx.accountId }).config.actions;
@@ -603,6 +831,7 @@ type SignalActionConfig = {
   poll?: boolean;
   editMessage?: boolean;
   deleteMessage?: boolean;
+  pinMessage?: boolean;
   stickers?: boolean;
   groupManagement?: boolean;
 };
@@ -948,6 +1177,54 @@ function parseSignalStickerParams(params: Record<string, unknown>): {
   };
 }
 
+function readBooleanParamLoose(params: Record<string, unknown>, key: string): boolean | undefined {
+  const value = params[key];
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") {
+      return true;
+    }
+    if (normalized === "false") {
+      return false;
+    }
+  }
+  return undefined;
+}
+
+function readPositiveIntegerParamLoose(
+  params: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const value = params[key];
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim()
+        ? Number.parseInt(value.trim(), 10)
+        : Number.NaN;
+  if (!Number.isFinite(parsed)) {
+    return undefined;
+  }
+  const normalized = Math.trunc(parsed);
+  if (normalized <= 0) {
+    throw new Error(`Signal ${key} must be a positive integer.`);
+  }
+  return normalized;
+}
+
+function resolveSignalSendMediaUrls(params: Record<string, unknown>): string[] {
+  const singleMedia = readStringParam(params, "media", { trim: false });
+  const manyMedia = Array.isArray(params.mediaUrls)
+    ? params.mediaUrls
+        .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+        .filter(Boolean)
+    : [];
+  return [...(singleMedia ? [singleMedia] : []), ...manyMedia];
+}
+
 function readStringArrayParamLoose(
   params: Record<string, unknown>,
   key: string,
@@ -964,6 +1241,42 @@ function readStringArrayParamLoose(
     return trimmed ? [trimmed] : undefined;
   }
   return undefined;
+}
+
+function readSignalMentionRangesParam(
+  params: Record<string, unknown>,
+  key: string,
+): Array<{ start: number; length: number; recipient: string }> | undefined {
+  const value = params[key];
+  if (value == null) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`Signal ${key} must be an array.`);
+  }
+  const mentions = value.map((entry, index) => {
+    if (!isRecord(entry)) {
+      throw new Error(`Signal ${key}[${index}] must be an object.`);
+    }
+    const start = Number(entry.start);
+    const length = Number(entry.length);
+    const recipient = typeof entry.recipient === "string" ? entry.recipient.trim() : "";
+    if (!Number.isFinite(start) || start < 0) {
+      throw new Error(`Signal ${key}[${index}].start must be a non-negative number.`);
+    }
+    if (!Number.isFinite(length) || length <= 0) {
+      throw new Error(`Signal ${key}[${index}].length must be a positive number.`);
+    }
+    if (!recipient) {
+      throw new Error(`Signal ${key}[${index}].recipient is required.`);
+    }
+    return {
+      start: Math.trunc(start),
+      length: Math.trunc(length),
+      recipient,
+    };
+  });
+  return mentions.length > 0 ? mentions : undefined;
 }
 
 function resolveSenderScopedToolPolicy(
@@ -1206,26 +1519,27 @@ export const signalPlugin = createChatChannelPlugin<ResolvedSignalAccount, Signa
       stripPatterns: () => ["\uFFFC"],
     },
     groups: {
-    resolveRequireMention: (params) =>
-      getSignalRuntime().channel.groups.resolveRequireMention({
-        cfg: params.cfg,
-        channel: SIGNAL_CHANNEL_ID,
-        groupId: params.groupId,
-        accountId: params.accountId ?? undefined,
-      }),
-    resolveToolPolicy: (params) => {
-      const policy = getSignalRuntime().channel.groups.resolveGroupPolicy({
-        cfg: params.cfg,
-        channel: SIGNAL_CHANNEL_ID,
-        groupId: params.groupId,
-        accountId: params.accountId ?? undefined,
-      });
-      const scopedPolicy = resolveSenderScopedToolPolicy(policy.groupConfig, params);
-      if (scopedPolicy) {
+      resolveRequireMention: (params) =>
+        resolveSignalGroupRuntimeConfig({
+          cfg: params.cfg,
+          groupId: params.groupId,
+          accountId: params.accountId ?? undefined,
+        }).requireMention ?? true,
+      resolveToolPolicy: (params) => {
+        const groupConfig = resolveSignalGroupRuntimeConfig({
+          cfg: params.cfg,
+          groupId: params.groupId,
+          accountId: params.accountId ?? undefined,
+        });
+        const scopedPolicy = resolveSenderScopedToolPolicy(
+          {
+            tools: groupConfig.tools,
+            toolsBySender: groupConfig.toolsBySender,
+          },
+          params,
+        );
         return scopedPolicy;
-      }
-      return resolveSenderScopedToolPolicy(policy.defaultConfig, params);
-    },
+      },
     },
     messaging: {
       normalizeTarget: normalizeSignalCustomMessagingTarget,
@@ -1236,6 +1550,48 @@ export const signalPlugin = createChatChannelPlugin<ResolvedSignalAccount, Signa
         looksLikeId: looksLikeSignalCustomTargetId,
         hint: "<E.164|uuid:ID|group:ID|signal-custom:group:ID|signal-custom:+E.164>",
       },
+    },
+    bindings: {
+      compileConfiguredBinding: ({ conversationId }) =>
+        normalizeSignalBindingConversationId(conversationId),
+      matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) =>
+        matchSignalBindingConversation({
+          bindingConversationId: compiledBinding.conversationId,
+          conversationId,
+          parentConversationId,
+        }),
+    },
+    execApprovals: {
+      getInitiatingSurfaceState: ({ cfg, accountId }) =>
+        isSignalExecApprovalClientEnabled({ cfg, accountId })
+          ? { kind: "enabled" }
+          : { kind: "disabled" },
+      shouldSuppressLocalPrompt: ({ cfg, accountId, payload }) =>
+        shouldSuppressLocalSignalExecApprovalPrompt({ cfg, accountId, payload }),
+      hasConfiguredDmRoute: ({ cfg }) => hasSignalExecApprovalDmRoute({ cfg }),
+      shouldSuppressForwardingFallback: ({ cfg, target, request }) => {
+        if (!isSignalChannelId(target.channel)) {
+          return false;
+        }
+        if (!isSignalChannelId(request.request.turnSourceChannel ?? "")) {
+          return false;
+        }
+        const accountId = target.accountId?.trim() || request.request.turnSourceAccountId?.trim();
+        return isSignalExecApprovalTargetEnabled({
+          cfg,
+          accountId,
+          to: target.to,
+        });
+      },
+    },
+    threading: {
+      resolveReplyToMode: ({ cfg, accountId }) =>
+        resolveSignalAccount({ cfg, accountId }).config.replyToMode ?? "all",
+      allowExplicitReplyTagsWhenOff: true,
+      resolveReplyTransport: ({ threadId, replyToId }) => ({
+        replyToId: replyToId ?? (threadId != null && threadId !== "" ? String(threadId) : undefined),
+        threadId: null,
+      }),
     },
     directory: {
       listPeers: async ({ cfg, accountId, query, limit }) => {

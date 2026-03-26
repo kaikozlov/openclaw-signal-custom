@@ -362,6 +362,40 @@ describe("signal monitor rich inbound context", () => {
     );
   });
 
+  it("injects GroupSystemPrompt from per-group signal config", async () => {
+    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime();
+    const handler = createHandler({
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15559990000",
+            groups: {
+              grp1: {
+                requireMention: false,
+                systemPrompt: "Be terse in Ops.",
+              },
+            },
+          },
+        },
+        messages: {
+          inbound: {
+            debounceMs: 0,
+          },
+        },
+      } as never,
+    });
+
+    await handler(
+      makeReceiveEvent({
+        message: "hello",
+        groupInfo: { groupId: "grp1", groupName: "Ops" },
+      }),
+    );
+
+    const ctx = capturedCtx(dispatchReplyWithBufferedBlockDispatcher);
+    expect(ctx?.GroupSystemPrompt).toBe("Be terse in Ops.");
+  });
+
   it("captures shared contacts as placeholder plus untrusted context", async () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime();
     const handler = createHandler();
@@ -419,6 +453,8 @@ describe("signal monitor rich inbound context", () => {
           targetSentTimestamp: 1234567890,
           optionIndexes: [1, 3],
         },
+      }, {
+        timestamp: 1700000000001,
       }),
     );
 
