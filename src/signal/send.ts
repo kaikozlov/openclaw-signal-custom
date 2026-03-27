@@ -6,6 +6,7 @@ import { signalRpcRequestWithRetry } from "./client.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
 import { resolveSignalReactionTarget } from "./reaction-target-cache.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
+import { recordSentSignalMessage } from "./sent-message-cache.js";
 
 export type SignalMentionRange = {
   start: number;
@@ -301,6 +302,9 @@ export async function sendMessageSignal(
     tcpPort: context.tcpPort,
   });
   const timestamp = result?.timestamp;
+  if (timestamp) {
+    recordSentSignalMessage({ target: to, messageId: String(timestamp) });
+  }
   return {
     messageId: timestamp ? String(timestamp) : "unknown",
     timestamp,
@@ -354,6 +358,9 @@ export async function sendPollCreateSignal(
     tcpPort: context.tcpPort,
   });
   const timestamp = result?.timestamp;
+  if (timestamp) {
+    recordSentSignalMessage({ target: to, messageId: String(timestamp) });
+  }
   return {
     messageId: timestamp ? String(timestamp) : "unknown",
     timestamp,

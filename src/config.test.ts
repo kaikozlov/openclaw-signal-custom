@@ -26,6 +26,7 @@ describe("signal-custom config", () => {
       typingTtlMs: 30000,
       injectLinkPreviews: true,
       preserveTextStyles: true,
+      reactionDelivery: "immediate",
       retry: {
         attempts: 2,
         minDelayMs: 0,

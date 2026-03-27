@@ -299,6 +299,29 @@ async function maybePromptSignalCustomExternalDaemon(params: {
   });
 }
 
+async function maybePromptSignalCustomReactionDelivery(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  prompter: WizardPrompter;
+}): Promise<OpenClawConfig> {
+  const current =
+    resolveSignalAccount({ cfg: params.cfg, accountId: params.accountId }).config.reactionDelivery ??
+    "queue";
+  const immediate = await params.prompter.confirm({
+    message: "Wake the model immediately when a Signal reaction arrives?",
+    initialValue: current === "immediate",
+  });
+  const nextMode = immediate ? "immediate" : "queue";
+  if (nextMode === current) {
+    return params.cfg;
+  }
+  return patchSignalCustomAccountConfig({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    patch: { reactionDelivery: nextMode },
+  });
+}
+
 export const signalCustomNumberTextInput: ChannelSetupWizardTextInput = {
   inputKey: "signalNumber",
   message: "Signal bot number (E.164)",
@@ -360,6 +383,7 @@ export const signalCustomIntroNote = {
   lines: [
     "Managed mode: leave httpUrl unset. OpenClaw will talk to a local signal-cli daemon and autostart it by default.",
     "External mode: set httpUrl. OpenClaw will use an already-running signal-cli daemon unless you explicitly enable autoStart.",
+    "Reaction delivery: queue keeps reaction system events for the next real run; immediate wakes the model right away with the same event text.",
   ],
 };
 
@@ -446,6 +470,7 @@ export const signalCustomSetupWizard: ChannelSetupWizard = {
   finalize: async ({ cfg, accountId, prompter }) => {
     let next = await maybePromptSignalCustomExternalDaemon({ cfg, accountId, prompter });
     next = await maybePromptSignalCustomConfigPath({ cfg: next, accountId, prompter });
+    next = await maybePromptSignalCustomReactionDelivery({ cfg: next, accountId, prompter });
     const inspected = inspectSignalAccount({ cfg: next, accountId });
     const warnings = collectSignalCustomSetupWarnings({ cfg: next, accountId });
     if (warnings.length > 0) {

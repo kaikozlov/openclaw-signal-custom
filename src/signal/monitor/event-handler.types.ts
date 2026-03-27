@@ -6,7 +6,10 @@ import type {
   ReplyPayload,
   RuntimeEnv,
 } from "../../runtime-api.js";
-import type { SignalReactionNotificationMode } from "../../config.js";
+import type {
+  SignalReactionDeliveryMode,
+  SignalReactionNotificationMode,
+} from "../../config.js";
 import type { SignalStreamingMode } from "../../config.js";
 import type { SignalSender } from "../identity.js";
 
@@ -188,6 +191,7 @@ export type SignalEventHandlerDeps = {
   baseUrl: string;
   account?: string;
   accountUuid?: string;
+  accountLabel?: string;
   accountId: string;
   streamMode?: SignalStreamingMode;
   blockStreaming?: boolean;
@@ -200,6 +204,7 @@ export type SignalEventHandlerDeps = {
   groupPolicy: GroupPolicy;
   reactionMode: SignalReactionNotificationMode;
   reactionAllowlist: string[];
+  reactionDelivery?: SignalReactionDeliveryMode;
   mediaMaxBytes: number;
   ignoreAttachments: boolean;
   ignoreStories?: boolean;
@@ -235,15 +240,24 @@ export type SignalEventHandlerDeps = {
   shouldEmitSignalReactionNotification: (params: {
     mode?: SignalReactionNotificationMode;
     account?: string | null;
+    accountUuid?: string | null;
     targets?: SignalReactionTarget[];
     sender?: SignalSender | null;
     allowlist?: string[];
+    knownOwnMessage?: boolean;
+  }) => boolean;
+  wasSentSignalMessage?: (params: {
+    groupId?: string;
+    recipient?: string;
+    messageId?: string;
   }) => boolean;
   buildSignalReactionSystemEventText: (params: {
     emojiLabel: string;
     actorLabel: string;
+    actorId?: string;
     messageId: string;
     targetLabel?: string;
+    targetIsOwn?: boolean;
     groupLabel?: string;
   }) => string;
   resolveMentionDisplayName?: (mention: SignalMention) => Promise<string | undefined>;

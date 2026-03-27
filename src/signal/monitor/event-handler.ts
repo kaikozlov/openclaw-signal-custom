@@ -1227,7 +1227,96 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     },
   });
 
-  function handleReactionOnlyInbound(params: {
+  function isOwnReactionTarget(params: {
+    targets: Array<{ kind: "phone" | "uuid"; id: string; display: string }>;
+    knownOwnMessage?: boolean;
+  }): boolean {
+    if (params.knownOwnMessage) {
+      return true;
+    }
+    const normalizedAccount =
+      typeof deps.account === "string" ? normalizeSignalAllowRecipient(deps.account) : undefined;
+    const normalizedAccountUuid =
+      typeof deps.accountUuid === "string" ? deps.accountUuid.trim().toLowerCase() : "";
+    return params.targets.some((target) => {
+      if (target.kind === "uuid") {
+        return Boolean(normalizedAccountUuid && target.id.toLowerCase() === normalizedAccountUuid);
+      }
+      return Boolean(normalizedAccount && target.id === normalizedAccount);
+    });
+  }
+
+  async function resolveReactionTargetLabel(params: {
+    targets: Array<{ kind: "phone" | "uuid"; id: string; display: string }>;
+    knownOwnMessage?: boolean;
+  }): Promise<string | undefined> {
+    if (params.targets.length === 0) {
+      return undefined;
+    }
+    if (isOwnReactionTarget(params)) {
+      return deps.accountLabel?.trim() || "the assistant";
+    }
+    for (const target of params.targets) {
+      const sender =
+        target.kind === "phone"
+          ? resolveSignalSender({ sourceNumber: target.id })
+          : resolveSignalSender({ sourceUuid: target.id });
+      if (!sender) {
+        continue;
+      }
+      const displayName = await deps.resolveSenderDisplayName?.(sender);
+      if (displayName) {
+        return sender.kind === "phone" ? `${displayName} (${sender.e164})` : displayName;
+      }
+    }
+    return params.targets[0]?.display;
+  }
+
+  async function dispatchImmediateReactionInbound(params: {
+    envelope: SignalEnvelope;
+    senderName: string;
+    senderDisplay: string;
+    senderRecipient: string;
+    senderPeerId: string;
+    emojiLabel: string;
+    messageId: string;
+    groupId?: string;
+    groupName?: string;
+    targetLabel?: string;
+    targetIsOwn?: boolean;
+  }): Promise<void> {
+    const isGroup = Boolean(params.groupId);
+    const groupLabel = isGroup ? `${params.groupName ?? "Signal Group"} id:${params.groupId}` : undefined;
+    const reactionText = deps.buildSignalReactionSystemEventText({
+      emojiLabel: params.emojiLabel,
+      actorLabel: params.senderName,
+      actorId: params.senderDisplay,
+      messageId: params.messageId,
+      targetLabel: params.targetLabel,
+      targetIsOwn: params.targetIsOwn,
+      groupLabel,
+    });
+    const syntheticTimestamp = resolveSignalEventTimestamp(params.envelope.timestamp) ?? Date.now();
+    await handleSignalInboundMessage({
+      senderName: params.senderName,
+      senderDisplay: params.senderDisplay,
+      senderRecipient: params.senderRecipient,
+      senderPeerId: params.senderPeerId,
+      groupId: params.groupId,
+      groupName: params.groupName,
+      isGroup,
+      bodyText: reactionText,
+      commandBody: reactionText,
+      bodyTextPlain: reactionText,
+      timestamp: syntheticTimestamp,
+      commandAuthorized: false,
+      receivedAtMs: Date.now(),
+      preprocessMs: 0,
+      attachmentResolveMs: 0,
+    });
+  }
+
+  async function handleReactionOnlyInbound(params: {
     envelope: SignalEnvelope;
     sender: SignalSender;
     senderDisplay: string;
@@ -1237,7 +1326,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       decision: "allow" | "block" | "pairing";
       reason: string;
     };
-  }): boolean {
+  }): Promise<boolean> {
     if (params.hasBodyContent) {
       return false;
     }
@@ -1256,18 +1345,55 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return true;
     }
     const targets = deps.resolveSignalReactionTargets(params.reaction);
+    const reactionSenderRecipient = resolveSignalRecipient(params.sender);
+    const knownOwnMessage = deps.wasSentSignalMessage?.({
+      groupId: isGroup ? groupId : undefined,
+      recipient: isGroup ? undefined : reactionSenderRecipient,
+      messageId: params.reaction.targetSentTimestamp
+        ? String(params.reaction.targetSentTimestamp)
+        : undefined,
+    });
     const shouldNotify = deps.shouldEmitSignalReactionNotification({
       mode: deps.reactionMode,
       account: deps.account,
+      accountUuid: deps.accountUuid,
       targets,
       sender: params.sender,
       allowlist: deps.reactionAllowlist,
+      knownOwnMessage,
     });
     if (!shouldNotify) {
       return true;
     }
+    const targetIsOwn = isOwnReactionTarget({
+      targets,
+      knownOwnMessage,
+    });
+    const targetLabel = await resolveReactionTargetLabel({
+      targets,
+      knownOwnMessage,
+    });
 
     const senderPeerId = resolveSignalPeerId(params.sender);
+    const messageId = params.reaction.targetSentTimestamp
+      ? String(params.reaction.targetSentTimestamp)
+      : "unknown";
+    if (deps.reactionDelivery === "immediate") {
+      await dispatchImmediateReactionInbound({
+        envelope: params.envelope,
+        senderName,
+        senderDisplay: params.senderDisplay,
+        senderRecipient: reactionSenderRecipient,
+        senderPeerId,
+        emojiLabel,
+        messageId,
+        groupId,
+        groupName,
+        targetLabel,
+        targetIsOwn,
+      });
+      return true;
+    }
     const route = pluginRuntime.channel.routing.resolveAgentRoute({
       cfg: deps.cfg,
       channel: SIGNAL_CHANNEL_ID,
@@ -1278,14 +1404,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
     });
     const groupLabel = isGroup ? `${groupName ?? "Signal Group"} id:${groupId}` : undefined;
-    const messageId = params.reaction.targetSentTimestamp
-      ? String(params.reaction.targetSentTimestamp)
-      : "unknown";
     const text = deps.buildSignalReactionSystemEventText({
       emojiLabel,
       actorLabel: senderName,
+      actorId: params.senderDisplay,
       messageId,
-      targetLabel: targets[0]?.display,
+      targetLabel,
+      targetIsOwn,
       groupLabel,
     });
     const senderId = formatSignalSenderId(params.sender);
@@ -1304,7 +1429,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       text,
       sessionKey: route.sessionKey,
       contextKey,
-      wakeAgent: true,
     });
     return true;
   }
@@ -1674,17 +1798,33 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           return;
         }
         const bareReactionTargets = deps.resolveSignalReactionTargets(bareReaction);
+        const bareReactionSenderRecipient = resolveSignalRecipient(sender);
+        const knownOwnMessage = deps.wasSentSignalMessage?.({
+          groupId: isGroup ? groupId : undefined,
+          recipient: isGroup ? undefined : bareReactionSenderRecipient,
+          messageId: targetTimestamp ? String(targetTimestamp) : undefined,
+        });
         const shouldNotifyBare = deps.shouldEmitSignalReactionNotification({
           mode: deps.reactionMode,
           account: deps.account,
+          accountUuid: deps.accountUuid,
           targets: bareReactionTargets,
           sender,
           allowlist: deps.reactionAllowlist,
+          knownOwnMessage,
         });
         if (!shouldNotifyBare) {
           logVerbose(`signal: bare reaction suppressed (reactionMode=${deps.reactionMode})`);
           return;
         }
+        const targetIsOwn = isOwnReactionTarget({
+          targets: bareReactionTargets,
+          knownOwnMessage,
+        });
+        const targetLabel = await resolveReactionTargetLabel({
+          targets: bareReactionTargets,
+          knownOwnMessage,
+        });
         const senderPeerIdBare = resolveSignalPeerId(sender);
         const routeBare = pluginRuntime.channel.routing.resolveAgentRoute({
           cfg: deps.cfg,
@@ -1696,11 +1836,30 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           },
         });
         const messageId = targetTimestamp ? String(targetTimestamp) : "unknown";
+        if (deps.reactionDelivery === "immediate") {
+          await dispatchImmediateReactionInbound({
+            envelope,
+            senderName,
+            senderDisplay: senderDisplayBare,
+            senderRecipient: bareReactionSenderRecipient,
+            senderPeerId: senderPeerIdBare,
+            emojiLabel,
+            messageId,
+            groupId,
+            groupName,
+            targetLabel,
+            targetIsOwn,
+          });
+          return;
+        }
         const groupLabel = isGroup ? `${groupName ?? "Signal Group"} id:${groupId}` : undefined;
         const text = deps.buildSignalReactionSystemEventText({
           emojiLabel,
           actorLabel: senderName,
+          actorId: senderDisplayBare,
           messageId,
+          targetLabel,
+          targetIsOwn,
           groupLabel,
         });
         enqueueSignalSystemEvent({
@@ -1717,7 +1876,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           ]
             .filter(Boolean)
             .join(":"),
-          wakeAgent: true,
         });
       }
       return;
@@ -1726,14 +1884,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
 
     if (
       reaction &&
-      handleReactionOnlyInbound({
+      (await handleReactionOnlyInbound({
         envelope,
         sender,
         senderDisplay,
         reaction,
         hasBodyContent,
         resolveAccessDecision,
-      })
+      }))
     ) {
       return;
     }

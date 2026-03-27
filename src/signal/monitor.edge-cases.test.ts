@@ -3,6 +3,15 @@ import { createSignalEventHandler } from "./monitor/event-handler.js";
 import { setSignalRuntime } from "../runtime.js";
 import type { SignalReactionMessage } from "./monitor/event-handler.types.js";
 import { createRecentSignalInboundDeduper } from "./recent-inbound-dedupe.js";
+import {
+  __clearSentSignalMessageCacheForTests,
+  recordSentSignalMessage,
+  wasSentSignalMessage,
+} from "./sent-message-cache.js";
+import {
+  buildSignalReactionSystemEventText,
+  shouldEmitSignalReactionNotification,
+} from "./monitor.js";
 
 function isReactionMessage(
   reaction: SignalReactionMessage | null | undefined,
@@ -201,6 +210,7 @@ function createHandler(overrides: Partial<Parameters<typeof createSignalEventHan
 describe("signal monitor edge cases", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    __clearSentSignalMessageCacheForTests();
   });
 
   it("evicts expired and oldest recent inbound dedupe entries predictably", () => {
@@ -713,10 +723,53 @@ describe("signal monitor edge cases", () => {
         contextKey: expect.stringContaining("signal-custom:reaction:added"),
       }),
     );
-    expect(requestHeartbeatNow).toHaveBeenCalledWith({
-      sessionKey: "session-1",
-      coalesceMs: 500,
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
+  });
+
+  it("dispatches an immediate inbound turn for reactions when reactionDelivery=immediate", async () => {
+    const { dispatchReplyWithBufferedBlockDispatcher, enqueueSystemEvent, requestHeartbeatNow } =
+      installRuntime();
+    const handler = createHandler({
+      reactionMode: "all",
+      reactionDelivery: "immediate",
+      resolveSignalReactionTargets: () => [
+        { kind: "phone", id: "+15559990000", display: "+15559990000" },
+      ],
+      shouldEmitSignalReactionNotification,
+      buildSignalReactionSystemEventText,
     });
+
+    await handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Alice",
+          reactionMessage: {
+            emoji: "👀",
+            targetAuthor: "+15559990000",
+            targetSentTimestamp: 1700000000012,
+          },
+        },
+      }),
+    });
+
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          SessionKey: "session-1",
+          SenderName: "Alice",
+          SenderId: "+15550001111",
+          Body: expect.stringContaining(
+            "Signal reaction: Alice (+15550001111) reacted 👀 to your message (msg 1700000000012)",
+          ),
+          CommandBody: "Signal reaction: Alice (+15550001111) reacted 👀 to your message (msg 1700000000012)",
+        }),
+      }),
+    );
   });
 
   it("ignores reaction removals that use the remove field", async () => {
@@ -748,6 +801,141 @@ describe("signal monitor edge cases", () => {
 
     expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
+  });
+
+  it("surfaces own-mode reactions for bot messages tracked in the sent-message cache", async () => {
+    const { dispatchReplyWithBufferedBlockDispatcher, enqueueSystemEvent, requestHeartbeatNow } =
+      installRuntime();
+    recordSentSignalMessage({
+      target: "+15550001111",
+      messageId: "1700000000009",
+    });
+    const handler = createHandler({
+      reactionMode: "own",
+      resolveSignalReactionTargets: () => [
+        {
+          kind: "uuid",
+          id: "signal-bot-uuid-only",
+          display: "uuid:signal-bot-uuid-only",
+        },
+      ],
+      shouldEmitSignalReactionNotification,
+      wasSentSignalMessage,
+      buildSignalReactionSystemEventText,
+    });
+
+    await handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Alice",
+          reactionMessage: {
+            emoji: "🔥",
+            targetAuthorUuid: "signal-bot-uuid-only",
+            targetSentTimestamp: 1700000000009,
+          },
+        },
+      }),
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(enqueueSystemEvent).toHaveBeenCalledOnce();
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      expect.stringContaining("Alice (+15550001111) reacted 🔥 to your message (msg 1700000000009)"),
+      expect.objectContaining({
+        contextKey: expect.stringContaining("signal-custom:reaction:added:1700000000009"),
+      }),
+    );
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
+  });
+
+  it("surfaces own-mode reactions when accountUuid matches the target author UUID", async () => {
+    const { dispatchReplyWithBufferedBlockDispatcher, enqueueSystemEvent, requestHeartbeatNow } =
+      installRuntime();
+    const handler = createHandler({
+      accountUuid: "signal-bot-uuid",
+      accountLabel: "sol",
+      reactionMode: "own",
+      resolveSignalReactionTargets: () => [
+        {
+          kind: "uuid",
+          id: "signal-bot-uuid",
+          display: "uuid:signal-bot-uuid",
+        },
+      ],
+      shouldEmitSignalReactionNotification,
+      buildSignalReactionSystemEventText,
+    });
+
+    await handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Alice",
+          reactionMessage: {
+            emoji: "✅",
+            targetAuthorUuid: "signal-bot-uuid",
+            targetSentTimestamp: 1700000000010,
+          },
+        },
+      }),
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(enqueueSystemEvent).toHaveBeenCalledOnce();
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      expect.stringContaining("Alice (+15550001111) reacted ✅ to your message (msg 1700000000010)"),
+      expect.objectContaining({
+        contextKey: expect.stringContaining("signal-custom:reaction:added:1700000000010"),
+      }),
+    );
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
+  });
+
+  it("formats non-own reaction targets using resolved plain-text names", async () => {
+    const { dispatchReplyWithBufferedBlockDispatcher, enqueueSystemEvent, requestHeartbeatNow } =
+      installRuntime();
+    const handler = createHandler({
+      reactionMode: "all",
+      resolveSignalReactionTargets: () => [
+        {
+          kind: "uuid",
+          id: "casey-target-uuid",
+          display: "uuid:casey-target-uuid",
+        },
+      ],
+      resolveSenderDisplayName: async (sender) =>
+        sender.kind === "uuid" && sender.raw === "casey-target-uuid" ? "Casey" : undefined,
+      shouldEmitSignalReactionNotification,
+      buildSignalReactionSystemEventText,
+    });
+
+    await handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Alice",
+          reactionMessage: {
+            emoji: "🤔",
+            targetAuthorUuid: "casey-target-uuid",
+            targetSentTimestamp: 1700000000011,
+          },
+        },
+      }),
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(enqueueSystemEvent).toHaveBeenCalledOnce();
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      expect.stringContaining("Alice (+15550001111) reacted 🤔 to Casey's message (msg 1700000000011)"),
+      expect.objectContaining({
+        contextKey: expect.stringContaining("signal-custom:reaction:added:1700000000011"),
+      }),
+    );
     expect(requestHeartbeatNow).not.toHaveBeenCalled();
   });
 
@@ -860,9 +1048,6 @@ describe("signal monitor edge cases", () => {
         contextKey: expect.stringContaining("signal-custom:reaction:added"),
       }),
     );
-    expect(requestHeartbeatNow).toHaveBeenCalledWith({
-      sessionKey: "session-1",
-      coalesceMs: 500,
-    });
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
   });
 });

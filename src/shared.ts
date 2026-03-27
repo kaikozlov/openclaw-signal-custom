@@ -71,6 +71,10 @@ function readRuntimeExtraUnknown(
   return runtime?.[key];
 }
 
+function formatSignalReactionDeliveryStatus(mode: "queue" | "immediate"): string {
+  return mode === "immediate" ? "reaction delivery: immediate" : "reaction delivery: queued";
+}
+
 function normalizeSignalAllowlistLookupKey(raw: string): string {
   return normalizeSignalAllowlistEntry(raw);
 }
@@ -284,6 +288,7 @@ export const signalCustomStatusAdapter = createComputedAccountStatusAdapter<
         : [],
   resolveAccountSnapshot: ({ account, runtime }) => {
     const runtimeExtra = runtime as Record<string, unknown> | undefined;
+    const reactionDelivery = account.config.reactionDelivery ?? "queue";
     return {
       accountId: account.accountId,
       name: account.name,
@@ -297,6 +302,8 @@ export const signalCustomStatusAdapter = createComputedAccountStatusAdapter<
         configPathSet: Boolean(account.config.configPath?.trim()),
         attachmentFastPathLikely: resolveSignalAttachmentFastPathLikely(account.config),
         receiveMode: account.config.receiveMode ?? "on-start",
+        reactionDelivery,
+        reactionDeliveryStatus: formatSignalReactionDeliveryStatus(reactionDelivery),
         directoryRefreshTtlMs: resolveSignalDirectoryRefreshTtlMs(account.config),
         reconnectMaxAttempts: resolveSignalReconnectMaxAttempts(account.config),
         supervisionMaxRestarts: resolveSignalSupervisionMaxRestarts(account.config),

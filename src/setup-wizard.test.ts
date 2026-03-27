@@ -7,6 +7,7 @@ import {
   signalCustomSetupWizard,
 } from "./setup-wizard.js";
 import { resolveSignalAccount } from "./config.js";
+import { signalCustomStatusAdapter } from "./shared.js";
 
 function createWizardPrompter(overrides?: {
   confirm?: Array<boolean>;
@@ -64,6 +65,7 @@ describe("signal custom setup wizard", () => {
       expect.arrayContaining([
         expect.stringContaining("Managed mode"),
         expect.stringContaining("External mode"),
+        expect.stringContaining("Reaction delivery"),
       ]),
     );
 
@@ -171,7 +173,7 @@ describe("signal custom setup wizard", () => {
       throw new Error("missing signal finalize step");
     }
     const prompter = createWizardPrompter({
-      confirm: [true, false],
+      confirm: [true, false, false],
       text: ["http://signal.example:8080"],
     });
     const finalized = await signalCustomSetupWizard.finalize({
@@ -200,6 +202,66 @@ describe("signal custom setup wizard", () => {
     expect(prompter.note).toHaveBeenCalledWith(
       expect.stringContaining("no configPath"),
       "Signal Custom warnings",
+    );
+  });
+
+  it("finalize can persist immediate reaction delivery", async () => {
+    if (!signalCustomSetupWizard.finalize) {
+      throw new Error("missing signal finalize step");
+    }
+    const prompter = createWizardPrompter({
+      confirm: [false, false, true],
+    });
+    const finalized = await signalCustomSetupWizard.finalize({
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15551234567",
+            cliPath: "signal-cli",
+          },
+        },
+      } as never,
+      accountId: "default",
+      credentialValues: {},
+      runtime: {} as never,
+      prompter: prompter as never,
+      options: {},
+      forceAllowFrom: false,
+    });
+
+    expect(
+      resolveSignalAccount({
+        cfg: finalized?.cfg ?? ({} as never),
+        accountId: "default",
+      }).config.reactionDelivery,
+    ).toBe("immediate");
+  });
+
+  it("exposes reaction delivery in the computed status snapshot", () => {
+    const account = resolveSignalAccount({
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15551234567",
+            reactionDelivery: "immediate",
+          },
+        },
+      } as never,
+      accountId: "default",
+    });
+
+    const snapshot = signalCustomStatusAdapter.buildAccountSnapshot?.({
+      account,
+      runtime: null,
+      probe: null,
+      audit: null,
+    } as never);
+
+    expect(snapshot).toEqual(
+      expect.objectContaining({
+        reactionDelivery: "immediate",
+        reactionDeliveryStatus: "reaction delivery: immediate",
+      }),
     );
   });
 });

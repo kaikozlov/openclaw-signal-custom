@@ -129,6 +129,7 @@ export type SignalGatewaySupervisionConfig = SignalReconnectPolicyConfig & {
 };
 
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
+export type SignalReactionDeliveryMode = "queue" | "immediate";
 export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
 export type SignalStreamingMode = "off" | "block" | "draft";
 
@@ -215,6 +216,7 @@ export type SignalAccountConfig = {
   typingTtlMs?: number;
   reactionNotifications?: SignalReactionNotificationMode;
   reactionAllowlist?: Array<string | number>;
+  reactionDelivery?: SignalReactionDeliveryMode;
   actions?: SignalActionConfig;
   replyToMode?: ReplyToMode;
   reactionLevel?: SignalReactionLevel;
@@ -358,6 +360,7 @@ export const SignalAccountSchemaBase = z
     typingTtlMs: z.number().int().positive().optional(),
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
     reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
+    reactionDelivery: z.enum(["queue", "immediate"]).optional(),
     actions: SignalActionsSchema,
     replyToMode: z.enum(["off", "first", "all"]).optional(),
     reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),

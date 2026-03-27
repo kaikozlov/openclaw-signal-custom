@@ -1400,10 +1400,7 @@ describe("signal monitor event handler", () => {
         contextKey: expect.stringContaining("signal-custom:reaction:added"),
       }),
     );
-    expect(requestHeartbeatNow).toHaveBeenCalledWith({
-      sessionKey: "session-1",
-      coalesceMs: 500,
-    });
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
   });
 
   it("blocks inbound messages for groups disabled via per-group config", async () => {

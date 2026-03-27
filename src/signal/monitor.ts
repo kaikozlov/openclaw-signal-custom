@@ -13,7 +13,10 @@ import {
   type ReplyPayload,
   type RuntimeEnv,
 } from "../runtime-api.js";
-import type { SignalReactionNotificationMode } from "../config.js";
+import type {
+  SignalReactionDeliveryMode,
+  SignalReactionNotificationMode,
+} from "../config.js";
 import { resolveSignalAccount, resolveSignalStreamingMode } from "../config.js";
 import { SIGNAL_CHANNEL_ID } from "../constants.js";
 import { getSignalRuntime } from "../runtime.js";
@@ -22,6 +25,7 @@ import {
   resolveSignalSender,
   type SignalSender,
 } from "./identity.js";
+import { wasSentSignalMessage } from "./sent-message-cache.js";
 import { createSignalDisplayNameResolver } from "./display-names.js";
 import {
   resolveSignalConnectionMode,
@@ -277,32 +281,40 @@ function isSignalReactionMessage(
   return hasTarget || reaction.isRemove === true || reaction.remove === true;
 }
 
-function shouldEmitSignalReactionNotification(params: {
+export function shouldEmitSignalReactionNotification(params: {
   mode?: SignalReactionNotificationMode;
   account?: string | null;
+  accountUuid?: string | null;
   targets?: SignalReactionTarget[];
   sender?: SignalSender | null;
   allowlist?: string[];
+  knownOwnMessage?: boolean;
 }) {
-  const { mode, account, targets, sender, allowlist } = params;
+  const { mode, account, accountUuid, targets, sender, allowlist, knownOwnMessage } = params;
   const effectiveMode = mode ?? "own";
   if (effectiveMode === "off") {
     return false;
   }
   if (effectiveMode === "own") {
+    if (knownOwnMessage) {
+      return true;
+    }
     const accountId = typeof account === "string" ? account.trim() : "";
-    const resolvedAccount = accountId
-      ? resolveSignalSender({ sourceNumber: accountId }) ??
-        resolveSignalSender({ sourceUuid: accountId })
-      : null;
-    if (!resolvedAccount || !targets || targets.length === 0) {
+    const accountPhone = accountId ? resolveSignalSender({ sourceNumber: accountId }) : null;
+    const normalizedAccountUuid =
+      typeof accountUuid === "string" ? accountUuid.trim().toLowerCase() : "";
+    if (
+      (accountPhone?.kind !== "phone" && !normalizedAccountUuid) ||
+      !targets ||
+      targets.length === 0
+    ) {
       return false;
     }
     return targets.some((target) => {
       if (target.kind === "uuid") {
-        return resolvedAccount.kind === "uuid" && resolvedAccount.raw === target.id;
+        return Boolean(normalizedAccountUuid && target.id.toLowerCase() === normalizedAccountUuid);
       }
-      return resolvedAccount.kind === "phone" && resolvedAccount.e164 === target.id;
+      return accountPhone?.kind === "phone" && accountPhone.e164 === target.id;
     });
   }
   if (effectiveMode === "allowlist") {
@@ -314,15 +326,25 @@ function shouldEmitSignalReactionNotification(params: {
   return true;
 }
 
-function buildSignalReactionSystemEventText(params: {
+export function buildSignalReactionSystemEventText(params: {
   emojiLabel: string;
   actorLabel: string;
+  actorId?: string;
   messageId: string;
   targetLabel?: string;
+  targetIsOwn?: boolean;
   groupLabel?: string;
 }) {
-  const base = `Signal reaction added: ${params.emojiLabel} by ${params.actorLabel} msg ${params.messageId}`;
-  const withTarget = params.targetLabel ? `${base} from ${params.targetLabel}` : base;
+  const actor =
+    params.actorId && params.actorId !== params.actorLabel
+      ? `${params.actorLabel} (${params.actorId})`
+      : params.actorLabel;
+  const base = `Signal reaction: ${actor} reacted ${params.emojiLabel}`;
+  const withTarget = params.targetIsOwn
+    ? `${base} to your message (msg ${params.messageId})`
+    : params.targetLabel
+      ? `${base} to ${params.targetLabel}'s message (msg ${params.messageId})`
+      : `${base} to a message (msg ${params.messageId})`;
   return params.groupLabel ? `${withTarget} in ${params.groupLabel}` : withTarget;
 }
 
@@ -797,6 +819,7 @@ async function runSignalProviderCycle(params: {
   groupPolicy: GroupPolicy;
   reactionMode: SignalReactionNotificationMode;
   reactionAllowlist: string[];
+  reactionDelivery: SignalReactionDeliveryMode;
   mediaMaxBytes: number;
   ignoreAttachments: boolean;
   sendReadReceipts: boolean;
@@ -859,6 +882,7 @@ async function runSignalProviderCycle(params: {
       baseUrl: params.baseUrl,
       account: params.account,
       accountUuid: accountInfo.config.accountUuid,
+      accountLabel: accountInfo.name,
       accountId: accountInfo.accountId,
       streamMode: resolveSignalStreamingMode({
         cfg,
@@ -874,6 +898,7 @@ async function runSignalProviderCycle(params: {
       groupPolicy: params.groupPolicy,
       reactionMode: params.reactionMode,
       reactionAllowlist: params.reactionAllowlist,
+      reactionDelivery: params.reactionDelivery,
       mediaMaxBytes: params.mediaMaxBytes,
       ignoreAttachments: params.ignoreAttachments,
       ignoreStories: opts.ignoreStories ?? accountInfo.config.ignoreStories,
@@ -887,6 +912,7 @@ async function runSignalProviderCycle(params: {
       resolveSignalReactionTargets,
       isSignalReactionMessage,
       shouldEmitSignalReactionNotification,
+      wasSentSignalMessage,
       buildSignalReactionSystemEventText,
       resolveMentionDisplayName: params.displayNameResolver.resolveMentionDisplayName,
       resolveSenderDisplayName: params.displayNameResolver.resolveSenderDisplayName,
@@ -973,6 +999,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   });
   const reactionMode = accountInfo.config.reactionNotifications ?? "own";
   const reactionAllowlist = normalizeAllowList(accountInfo.config.reactionAllowlist);
+  const reactionDelivery = accountInfo.config.reactionDelivery ?? "queue";
   const mediaMaxBytes = (opts.mediaMaxMb ?? accountInfo.config.mediaMaxMb ?? 8) * 1024 * 1024;
   const ignoreAttachments = opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments ?? false;
   const sendReadReceipts = Boolean(opts.sendReadReceipts ?? accountInfo.config.sendReadReceipts);
@@ -1023,6 +1050,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
           groupPolicy,
           reactionMode,
           reactionAllowlist,
+          reactionDelivery,
           mediaMaxBytes,
           ignoreAttachments,
           sendReadReceipts,

@@ -3,6 +3,7 @@ import { signalRpcRequestWithRetry } from "./client.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
 import { resolveSignalMarkdownTableMode } from "../config.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
+import { recordSentSignalMessage } from "./sent-message-cache.js";
 import {
   buildSignalMentionParams,
   type SignalMentionRange,
@@ -384,6 +385,9 @@ export async function sendStickerSignal(params: {
     tcpPort: context.tcpPort,
   });
   const timestamp = result?.timestamp;
+  if (timestamp) {
+    recordSentSignalMessage({ target: params.to, messageId: String(timestamp) });
+  }
   return {
     messageId: timestamp ? String(timestamp) : "unknown",
     timestamp,

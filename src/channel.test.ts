@@ -221,6 +221,8 @@ describe("signalPlugin outbound sendMedia", () => {
         configPathSet: false,
         attachmentFastPathLikely: false,
         receiveMode: "on-start",
+        reactionDelivery: "queue",
+        reactionDeliveryStatus: "reaction delivery: queued",
       }),
     );
     expect(
