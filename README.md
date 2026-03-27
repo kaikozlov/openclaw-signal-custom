@@ -1,6 +1,6 @@
 # openclaw-signal-custom
 
-A standalone Signal channel plugin for [OpenClaw](https://github.com/nicosql/openclaw), powered by `signal-cli`. Plugin id: `signal-custom`, config root: `channels.signal-custom`. Requires OpenClaw `>= 2026.3.24` and is source-validated against the local `REFERENCE_UNTRACKED/openclaw` checkout at `2026.3.25`.
+A standalone Signal channel plugin for [OpenClaw](https://github.com/nicosql/openclaw), powered by `signal-cli`. Plugin id: `signal-custom`, config root: `channels.signal-custom`. Requires OpenClaw `>= 2026.3.24`.
 
 This is a drop-in replacement for the bundled Signal channel. It covers the full `signal-cli` surface — DMs, groups, media, reactions, polls, stickers, stories, mentions, message editing, group admin, and more — with tested transport, clean formatting, and an access-control model that actually works.
 
