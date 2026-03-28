@@ -155,6 +155,58 @@ describe("signal edit/delete actions", () => {
     );
   });
 
+  it("normalizes signal-custom targets for edit and delete actions", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        makeResponse({
+          jsonrpc: "2.0",
+          result: { timestamp: 1700000000100 },
+        }),
+      )
+      .mockResolvedValueOnce(makeResponse({ jsonrpc: "2.0", result: null }));
+
+    const cfg = {
+      channels: {
+        "signal-custom": {
+          account: "+15550001111",
+          httpUrl: "http://signal.local",
+        },
+      },
+    } as never;
+
+    await editMessageSignal({
+      cfg,
+      to: "signal-custom:+15550002222",
+      text: "updated",
+      editTimestamp: 1700000000000,
+    });
+    await deleteMessageSignal({
+      cfg,
+      to: "signal-custom:group:group-id",
+      targetTimestamp: 1700000000000,
+    });
+
+    const editBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      method: string;
+      params: Record<string, unknown>;
+    };
+    expect(editBody.params).toEqual(
+      expect.objectContaining({
+        recipient: ["+15550002222"],
+      }),
+    );
+
+    const deleteBody = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body)) as {
+      method: string;
+      params: Record<string, unknown>;
+    };
+    expect(deleteBody.params).toEqual(
+      expect.objectContaining({
+        groupId: "group-id",
+      }),
+    );
+  });
+
   it("sends stickers via Signal RPC send with sticker payload", async () => {
     fetchMock.mockResolvedValueOnce(
       makeResponse({
@@ -239,6 +291,64 @@ describe("signal edit/delete actions", () => {
         targetAuthor: "+15550002222",
         targetTimestamp: 1700000000003,
         pinDuration: -1,
+      }),
+    );
+  });
+
+  it("normalizes signal-custom targets for pin and unpin actions", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        makeResponse({
+          jsonrpc: "2.0",
+          result: { timestamp: 1700000000021 },
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeResponse({
+          jsonrpc: "2.0",
+          result: { timestamp: 1700000000022 },
+        }),
+      );
+
+    const cfg = {
+      channels: {
+        "signal-custom": {
+          account: "+15550001111",
+          httpUrl: "http://signal.local",
+        },
+      },
+    } as never;
+
+    await pinMessageSignal({
+      cfg,
+      to: "signal-custom:group:group-1",
+      targetAuthor: "+15550002222",
+      targetTimestamp: 1700000000003,
+    });
+    await unpinMessageSignal({
+      cfg,
+      to: "signal-custom:+15550002222",
+      targetAuthor: "+15550002222",
+      targetTimestamp: 1700000000004,
+    });
+
+    const pinBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+      method: string;
+      params: Record<string, unknown>;
+    };
+    expect(pinBody.params).toEqual(
+      expect.objectContaining({
+        groupId: "group-1",
+      }),
+    );
+
+    const unpinBody = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body)) as {
+      method: string;
+      params: Record<string, unknown>;
+    };
+    expect(unpinBody.params).toEqual(
+      expect.objectContaining({
+        recipient: ["+15550002222"],
       }),
     );
   });

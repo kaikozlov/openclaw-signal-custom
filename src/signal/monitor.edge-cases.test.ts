@@ -229,6 +229,20 @@ describe("signal monitor edge cases", () => {
     expect(deduper.recordAndCheckDuplicate("stale", 75_500)).toBe(false);
   });
 
+  it("does not let a refreshed key block stale-entry pruning", () => {
+    const deduper = createRecentSignalInboundDeduper({
+      ttlMs: 30_000,
+      maxEntries: 2,
+    });
+
+    expect(deduper.recordAndCheckDuplicate("a", 1_000)).toBe(false);
+    expect(deduper.recordAndCheckDuplicate("b", 2_000)).toBe(false);
+    expect(deduper.recordAndCheckDuplicate("a", 25_000)).toBe(true);
+
+    expect(deduper.recordAndCheckDuplicate("c", 34_000)).toBe(false);
+    expect(deduper.recordAndCheckDuplicate("a", 34_001)).toBe(true);
+  });
+
   it("accepts group envelopes when syncMessage is present but null", async () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime();
     const handler = createHandler({
@@ -460,6 +474,61 @@ describe("signal monitor edge cases", () => {
     });
 
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+  });
+
+  it("caps concurrent inbound attachment fetches", async () => {
+    installRuntime();
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let releaseFetches: (() => void) | undefined;
+    const fetchGate = new Promise<void>((resolve) => {
+      releaseFetches = resolve;
+    });
+    const fetchAttachment = vi.fn(
+      async ({ attachment }: { attachment: { id?: string | null } }) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await fetchGate;
+        inFlight -= 1;
+        return {
+          path: `/tmp/${attachment.id ?? "attachment"}`,
+          contentType: "image/png",
+        };
+      },
+    );
+    const handler = createHandler({
+      fetchAttachment,
+      deliverReplies: async () => {},
+    });
+
+    const handling = handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Casey",
+          timestamp: 1712345678901,
+          dataMessage: {
+            message: "photos",
+            attachments: Array.from({ length: 6 }, (_, index) => ({
+              id: `attachment-${index + 1}.png`,
+              contentType: "image/png",
+            })),
+          },
+        },
+      }),
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(maxInFlight).toBeGreaterThan(0);
+      });
+      expect(maxInFlight).toBeLessThanOrEqual(4);
+    } finally {
+      releaseFetches?.();
+      await handling;
+    }
   });
 
   it("does not block reply dispatch on read receipt completion", async () => {

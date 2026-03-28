@@ -57,6 +57,8 @@ import {
 } from "../format.js";
 import { createSignalDraftStream } from "../draft-stream.js";
 
+const MAX_SIGNAL_INBOUND_ATTACHMENT_FETCH_CONCURRENCY = 4;
+
 function resolvePinnedMainDmOwnerFromAllowlist(params: {
   dmScope?: string | null;
   allowFrom?: Array<string | number> | null;
@@ -136,6 +138,57 @@ function normalizeSenderNameValue(value?: string | null): string | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function shouldBufferSignalTerminalPayload(
+  payload: ReplyPayload,
+  kind: "final" | "block" | "tool",
+): boolean {
+  if (kind === "tool") {
+    return false;
+  }
+  if (payload.isReasoning === true || payload.isCompactionNotice === true) {
+    return false;
+  }
+  return resolveSendableOutboundReplyParts(payload).hasContent;
+}
+
+async function settleWithConcurrencyLimit<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<Array<PromiseSettledResult<R>>> {
+  if (items.length === 0) {
+    return [];
+  }
+  const results: Array<PromiseSettledResult<R>> = new Array(items.length);
+  const concurrency = Math.max(1, Math.min(items.length, Math.trunc(limit)));
+  let nextIndex = 0;
+
+  await Promise.all(
+    Array.from({ length: concurrency }, async () => {
+      while (true) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        if (currentIndex >= items.length) {
+          return;
+        }
+        try {
+          results[currentIndex] = {
+            status: "fulfilled",
+            value: await worker(items[currentIndex]!, currentIndex),
+          };
+        } catch (reason) {
+          results[currentIndex] = {
+            status: "rejected",
+            reason,
+          };
+        }
+      }
+    }),
+  );
+
+  return results;
 }
 
 function resolveSignalDraftFinalChunk(params: {
@@ -616,8 +669,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       width?: number;
       height?: number;
     }> = [];
-    const fetchResults = await Promise.allSettled(
-      params.attachments.map(async (attachment) => {
+    const fetchResults = await settleWithConcurrencyLimit(
+      params.attachments,
+      MAX_SIGNAL_INBOUND_ATTACHMENT_FETCH_CONCURRENCY,
+      async (attachment) => {
         if (!attachment?.id) {
           return null;
         }
@@ -639,7 +694,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           width: normalizeDimensionValue(attachment.width),
           height: normalizeDimensionValue(attachment.height),
         };
-      }),
+      },
     );
     for (const result of fetchResults) {
       if (result.status === "rejected") {
@@ -918,6 +973,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const resolvedStreamMode =
       deps.streamMode ??
       (typeof deps.blockStreaming === "boolean" ? (deps.blockStreaming ? "block" : "off") : "block");
+    const silentIntermediateReplies = deps.silentIntermediateReplies !== false;
+    const intermediateReplySilent = silentIntermediateReplies ? true : undefined;
     const draftStream =
       resolvedStreamMode === "draft" && ctxPayload.To
         ? createSignalDraftStream({
@@ -933,6 +990,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           })
         : undefined;
     let finalizedViaDraftPreview = false;
+    let pendingTerminalBlock: ReplyPayload | undefined;
 
     const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
       cfg: deps.cfg,
@@ -981,6 +1039,32 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
 
     const dispatchStartedAt = Date.now();
     const contextBuildMs = Math.max(0, dispatchStartedAt - contextStartedAt);
+    const deliverSignalReply = async (payload: ReplyPayload, silent?: boolean) => {
+      await deps.deliverReplies({
+        replies: [payload],
+        target: ctxPayload.To,
+        baseUrl: deps.baseUrl,
+        account: deps.account,
+        accountId: deps.accountId,
+        runtime: deps.runtime,
+        maxBytes: deps.mediaMaxBytes,
+        textLimit: deps.textLimit,
+        silent,
+        quoteAuthor: entry.senderRecipient || undefined,
+        storyTimestamp: entry.storyReplyTimestamp,
+        storyAuthor: entry.storyReplyAuthor,
+      });
+    };
+    const flushPendingTerminalBlock = async (silent?: boolean): Promise<boolean> => {
+      const payload = pendingTerminalBlock;
+      if (!payload) {
+        return false;
+      }
+      pendingTerminalBlock = undefined;
+      await deliverSignalReply(payload, silent);
+      return shouldBufferSignalTerminalPayload(payload, "final");
+    };
+
     const { queuedFinal } =
       await pluginRuntime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
         ctx: ctxPayload,
@@ -989,7 +1073,19 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           ...replyPipeline,
           humanDelay: pluginRuntime.channel.reply.resolveHumanDelayConfig(deps.cfg, route.agentId),
           deliver: async (payload, info) => {
-            if (draftStream && info?.kind === "final") {
+            // OpenClaw partial replies are handled separately via replyOptions.onPartialReply.
+            // This callback only sees dispatched tool/block/final payloads.
+            const kind = info?.kind ?? "final";
+            if (
+              resolvedStreamMode === "block" &&
+              shouldBufferSignalTerminalPayload(payload, kind)
+            ) {
+              await flushPendingTerminalBlock(intermediateReplySilent);
+              pendingTerminalBlock = payload;
+              return;
+            }
+            await flushPendingTerminalBlock(intermediateReplySilent);
+            if (draftStream && kind === "final") {
               await draftStream.flush();
               const previewMessageId = draftStream.messageId();
               const finalChunk =
@@ -1021,19 +1117,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
               }
               await draftStream.clear();
             }
-            await deps.deliverReplies({
-              replies: [payload],
-              target: ctxPayload.To,
-              baseUrl: deps.baseUrl,
-              account: deps.account,
-              accountId: deps.accountId,
-              runtime: deps.runtime,
-              maxBytes: deps.mediaMaxBytes,
-              textLimit: deps.textLimit,
-              quoteAuthor: entry.senderRecipient || undefined,
-              storyTimestamp: entry.storyReplyTimestamp,
-              storyAuthor: entry.storyReplyAuthor,
-            });
+            await deliverSignalReply(
+              payload,
+              silentIntermediateReplies &&
+              (kind !== "final" ||
+                payload.isReasoning === true ||
+                payload.isCompactionNotice === true)
+                ? true
+                : undefined,
+            );
           },
           onError: (err, info) => {
             deps.runtime.error?.(`signal ${info.kind} reply failed: ${String(err)}`);
@@ -1074,6 +1166,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             : undefined,
         },
       });
+    const terminalBlockDelivered = await flushPendingTerminalBlock();
+    const deliveredFinalReply = queuedFinal || terminalBlockDelivered;
     const dispatchMs = Math.max(0, Date.now() - dispatchStartedAt);
 
     if (draftStream) {
@@ -1088,7 +1182,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     }
 
     if (statusReactionController) {
-      if (!queuedFinal) {
+      if (!deliveredFinalReply) {
         void statusReactionController.setError().catch((err) => {
           logVerbose(`Signal status reaction failed: ${String(err)}`);
         });
@@ -1099,7 +1193,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }
     }
 
-    if (!queuedFinal) {
+    if (!deliveredFinalReply) {
       logInboundTiming({
         entry,
         contextBuildMs,

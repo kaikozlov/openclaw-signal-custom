@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { listSignalContacts, listSignalGroups, updateContactSignal } from "./directory.js";
+import {
+  __clearSignalDirectoryCacheForTests,
+  listSignalContacts,
+  listSignalGroups,
+  updateContactSignal,
+} from "./directory.js";
 
 function makeResponse(body: unknown, status = 200): Response {
   const text = typeof body === "string" ? body : JSON.stringify(body);
@@ -27,10 +32,12 @@ describe("signal directory RPC", () => {
   beforeEach(() => {
     fetchMock.mockReset();
     global.fetch = fetchMock;
+    __clearSignalDirectoryCacheForTests();
   });
 
   afterEach(() => {
     global.fetch = originalFetch;
+    __clearSignalDirectoryCacheForTests();
   });
 
   it("lists contacts via listContacts RPC", async () => {
@@ -96,5 +103,21 @@ describe("signal directory RPC", () => {
         account: "+15550001111",
       }),
     );
+  });
+
+  it("reuses cached contact results within the directory TTL", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        jsonrpc: "2.0",
+        result: [{ number: "+15550002222", name: "Alice" }],
+      }),
+    );
+
+    const first = await listSignalContacts({ cfg });
+    const second = await listSignalContacts({ cfg });
+
+    expect(first).toEqual([{ number: "+15550002222", name: "Alice" }]);
+    expect(second).toEqual(first);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

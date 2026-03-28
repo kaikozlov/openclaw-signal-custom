@@ -24,6 +24,7 @@ describe("signal-custom config", () => {
       tcpPort: 7583,
       sseIdleTimeoutMs: 0,
       typingTtlMs: 30000,
+      silentIntermediateReplies: false,
       injectLinkPreviews: true,
       preserveTextStyles: true,
       reactionDelivery: "immediate",
@@ -100,6 +101,37 @@ describe("signal-custom config", () => {
         accountId: "work",
       }).config.typingTtlMs,
     ).toBe(90000);
+  });
+
+  it("resolves silent intermediate reply config with account override precedence", () => {
+    const cfg = {
+      channels: {
+        "signal-custom": {
+          account: "+15550001111",
+          silentIntermediateReplies: true,
+          accounts: {
+            Work: {
+              account: "+15550002222",
+              httpUrl: "http://signal-work.local",
+              silentIntermediateReplies: false,
+            },
+          },
+        },
+      },
+    } as const;
+
+    expect(
+      resolveSignalAccount({
+        cfg: cfg as never,
+        accountId: "default",
+      }).config.silentIntermediateReplies,
+    ).toBe(true);
+    expect(
+      resolveSignalAccount({
+        cfg: cfg as never,
+        accountId: "work",
+      }).config.silentIntermediateReplies,
+    ).toBe(false);
   });
 
   it("resolves accounts from channels.signal-custom", () => {

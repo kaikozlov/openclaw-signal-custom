@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../runtime-api.js";
+import { stripSignalChannelPrefix } from "../constants.js";
 import { signalRpcRequestWithRetry } from "./client.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
 import { resolveSignalMarkdownTableMode } from "../config.js";
@@ -46,13 +47,9 @@ type SignalTargetAllowlist = {
 };
 
 function parseTarget(raw: string): SignalTarget {
-  let value = raw.trim();
+  let value = stripSignalChannelPrefix(raw.trim());
   if (!value) {
     throw new Error("Signal recipient is required");
-  }
-  const lower = value.toLowerCase();
-  if (lower.startsWith("signal:")) {
-    value = value.slice("signal:".length).trim();
   }
   const normalized = value.toLowerCase();
   if (normalized.startsWith("group:")) {

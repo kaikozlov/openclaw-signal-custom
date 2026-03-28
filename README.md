@@ -166,12 +166,15 @@ See [src/config.ts](./src/config.ts) for the full schema with types and defaults
 |-----|-------------|
 | `textChunkLimit` | Max characters per outbound text chunk |
 | `streaming` | `off`, `block`, or `draft` reply streaming mode |
+| `silentIntermediateReplies` | Send non-final auto-reply chunks with Signal `noUrgent` (default: `true`) |
 | `typingTtlMs` | Max duration for typing indicators |
 | `sendReadReceipts` | Send read receipts on inbound messages |
 | `responsePrefix` | Prefix applied to all bot replies |
 | `mediaMaxMb` | Max inbound media size in MB |
 | `replyToMode` | `off`, `first`, or `all` reply-tag forwarding policy |
 | `directoryRefreshTtlMs` | Contact/group directory cache refresh TTL in milliseconds |
+
+`silentIntermediateReplies` only affects outbound auto replies that this plugin sends during a multi-part response. It maps to Signal's `noUrgent` send flag for intermediate chunks. Signal may still surface those earlier messages when a later urgent message arrives and opens the thread.
 
 ### Runtime resilience
 

@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../runtime-api.js";
+import { resolveSignalAccount } from "../config.js";
 import { signalRpcRequestWithRetry } from "./client.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
 
@@ -38,6 +39,15 @@ export type SignalGroup = {
   [key: string]: unknown;
 };
 
+type SignalDirectoryCacheEntry = {
+  value?: unknown;
+  cachedAt: number;
+  pending?: Promise<unknown>;
+};
+
+const DEFAULT_SIGNAL_DIRECTORY_REFRESH_TTL_MS = 5 * 60 * 1000;
+const signalDirectoryCache = new Map<string, SignalDirectoryCacheEntry>();
+
 function normalizeSignalDirectoryIdentifier(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -51,6 +61,70 @@ function normalizeSignalDirectoryIdentifier(raw: string): string {
     return withoutSignal.slice("uuid:".length).trim();
   }
   return withoutSignal;
+}
+
+function resolveSignalDirectoryRefreshTtlMs(opts: SignalDirectoryOpts): number {
+  const account = resolveSignalAccount({
+    cfg: opts.cfg,
+    accountId: opts.accountId,
+  });
+  return Math.max(0, account.config.directoryRefreshTtlMs ?? DEFAULT_SIGNAL_DIRECTORY_REFRESH_TTL_MS);
+}
+
+function buildSignalDirectoryCacheKey(params: {
+  scope: string;
+  context: ReturnType<typeof resolveSignalRpcContext>;
+}): string {
+  return [
+    params.scope,
+    params.context.baseUrl,
+    params.context.account ?? "",
+    params.context.tcpHost ?? "",
+    params.context.tcpPort ?? "",
+  ].join("|");
+}
+
+async function loadCachedSignalDirectoryValue<T>(params: {
+  cacheKey: string;
+  ttlMs: number;
+  load: () => Promise<T>;
+}): Promise<T> {
+  if (params.ttlMs <= 0) {
+    return await params.load();
+  }
+
+  const now = Date.now();
+  const cached = signalDirectoryCache.get(params.cacheKey);
+  if (cached && cached.value !== undefined && now - cached.cachedAt < params.ttlMs) {
+    return cached.value as T;
+  }
+  if (cached?.pending) {
+    return await cached.pending as T;
+  }
+
+  const pending = params.load()
+    .then((value) => {
+      signalDirectoryCache.set(params.cacheKey, {
+        value,
+        cachedAt: Date.now(),
+      });
+      return value;
+    })
+    .catch((error) => {
+      const current = signalDirectoryCache.get(params.cacheKey);
+      if (current?.pending === pending) {
+        signalDirectoryCache.delete(params.cacheKey);
+      }
+      throw error;
+    });
+
+  signalDirectoryCache.set(params.cacheKey, {
+    cachedAt: cached?.cachedAt ?? 0,
+    value: cached?.value,
+    pending,
+  });
+
+  return await pending;
 }
 
 export async function listSignalGroups(
@@ -68,14 +142,23 @@ export async function listSignalGroups(
   if (context.account) {
     rpcParams.account = context.account;
   }
-  const result = await signalRpcRequestWithRetry("listGroups", rpcParams, {
-    baseUrl: context.baseUrl,
-    timeoutMs: opts.timeoutMs,
-    retry: context.retry,
-    tcpHost: context.tcpHost,
-    tcpPort: context.tcpPort,
+  return await loadCachedSignalDirectoryValue({
+    cacheKey: buildSignalDirectoryCacheKey({
+      scope: params.detailed === true ? "groups:detailed" : "groups:summary",
+      context,
+    }),
+    ttlMs: resolveSignalDirectoryRefreshTtlMs(opts),
+    load: async () => {
+      const result = await signalRpcRequestWithRetry("listGroups", rpcParams, {
+        baseUrl: context.baseUrl,
+        timeoutMs: opts.timeoutMs,
+        retry: context.retry,
+        tcpHost: context.tcpHost,
+        tcpPort: context.tcpPort,
+      });
+      return Array.isArray(result) ? (result as SignalGroup[]) : [];
+    },
   });
-  return Array.isArray(result) ? (result as SignalGroup[]) : [];
 }
 
 export async function listSignalContacts(opts: SignalDirectoryOpts): Promise<SignalContact[]> {
@@ -87,14 +170,23 @@ export async function listSignalContacts(opts: SignalDirectoryOpts): Promise<Sig
   if (context.account) {
     rpcParams.account = context.account;
   }
-  const result = await signalRpcRequestWithRetry("listContacts", rpcParams, {
-    baseUrl: context.baseUrl,
-    timeoutMs: opts.timeoutMs,
-    retry: context.retry,
-    tcpHost: context.tcpHost,
-    tcpPort: context.tcpPort,
+  return await loadCachedSignalDirectoryValue({
+    cacheKey: buildSignalDirectoryCacheKey({
+      scope: "contacts",
+      context,
+    }),
+    ttlMs: resolveSignalDirectoryRefreshTtlMs(opts),
+    load: async () => {
+      const result = await signalRpcRequestWithRetry("listContacts", rpcParams, {
+        baseUrl: context.baseUrl,
+        timeoutMs: opts.timeoutMs,
+        retry: context.retry,
+        tcpHost: context.tcpHost,
+        tcpPort: context.tcpPort,
+      });
+      return Array.isArray(result) ? (result as SignalContact[]) : [];
+    },
   });
-  return Array.isArray(result) ? (result as SignalContact[]) : [];
 }
 
 export async function updateContactSignal(
@@ -128,4 +220,8 @@ export async function updateContactSignal(
     tcpHost: context.tcpHost,
     tcpPort: context.tcpPort,
   });
+}
+
+export function __clearSignalDirectoryCacheForTests(): void {
+  signalDirectoryCache.clear();
 }

@@ -13,13 +13,19 @@ export function createRecentSignalInboundDeduper(params?: {
 
   const prune = (nowMs: number) => {
     for (const [key, recordedAt] of seenAt) {
-      if (nowMs - recordedAt <= ttlMs) {
-        break;
+      if (nowMs - recordedAt > ttlMs) {
+        seenAt.delete(key);
       }
-      seenAt.delete(key);
     }
     while (seenAt.size > maxEntries) {
-      const oldest = seenAt.keys().next().value;
+      let oldest: string | undefined;
+      let oldestRecordedAt = Number.POSITIVE_INFINITY;
+      for (const [key, recordedAt] of seenAt) {
+        if (recordedAt < oldestRecordedAt) {
+          oldestRecordedAt = recordedAt;
+          oldest = key;
+        }
+      }
       if (!oldest) {
         break;
       }

@@ -23,6 +23,12 @@ function isReactionMessage(
 function installRuntime(params?: {
   dispatchReplyWithBufferedBlockDispatcher?: (args: {
     ctx: Record<string, unknown>;
+    dispatcherOptions?: {
+      deliver: (
+        payload: Record<string, unknown>,
+        info: { kind: "final" | "block" | "tool" },
+      ) => Promise<void>;
+    };
     replyOptions?: Record<string, unknown>;
   }) => Promise<{
     queuedFinal: boolean;
@@ -358,6 +364,22 @@ describe("signal ack reactions", () => {
   });
 
   it("uses status reactions for queued and done lifecycle when enabled", async () => {
+    installRuntime({
+      dispatchReplyWithBufferedBlockDispatcher: async ({
+        dispatcherOptions,
+      }: {
+        ctx: Record<string, unknown>;
+        dispatcherOptions?: {
+          deliver: (
+            payload: Record<string, unknown>,
+            info: { kind: "final" | "block" | "tool" },
+          ) => Promise<void>;
+        };
+      }) => {
+        await dispatcherOptions?.deliver?.({ text: "done" }, { kind: "final" });
+        return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+      },
+    });
     const handler = createHandler({
       cfg: {
         channels: {

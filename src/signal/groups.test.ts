@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { __clearSignalDirectoryCacheForTests } from "./directory.js";
 import {
   getGroupInfoSignal,
   joinGroupSignal,
@@ -33,10 +34,12 @@ describe("signal groups RPC", () => {
   beforeEach(() => {
     fetchMock.mockReset();
     global.fetch = fetchMock;
+    __clearSignalDirectoryCacheForTests();
   });
 
   afterEach(() => {
     global.fetch = originalFetch;
+    __clearSignalDirectoryCacheForTests();
   });
 
   it("lists group members by fetching detailed groups", async () => {
@@ -95,6 +98,45 @@ describe("signal groups RPC", () => {
         name: "Core Team",
         member: ["+15550002222", "abc-123"],
         removeMember: ["def-456"],
+      }),
+    );
+  });
+
+  it("normalizes signal-custom group ids and member ids", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        makeResponse({
+          jsonrpc: "2.0",
+          result: [
+            {
+              id: "group-1",
+              members: [{ number: "+15550002222", name: "Alice" }],
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(makeResponse({ jsonrpc: "2.0", result: null }));
+
+    const members = await listGroupMembersSignal("signal-custom:group:group-1", { cfg });
+
+    expect(members).toEqual([{ number: "+15550002222", name: "Alice" }]);
+
+    await updateGroupSignal(
+      "signal-custom:group:group-1",
+      {
+        addMembers: ["signal-custom:+15550002222", "signal-custom:uuid:abc-123"],
+      },
+      { cfg },
+    );
+
+    const updateBody = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body)) as {
+      method: string;
+      params: Record<string, unknown>;
+    };
+    expect(updateBody.params).toEqual(
+      expect.objectContaining({
+        groupId: "group-1",
+        member: ["+15550002222", "abc-123"],
       }),
     );
   });
@@ -176,6 +218,33 @@ describe("signal groups RPC", () => {
         description: "Operators",
       }),
     );
+  });
+
+  it("reuses cached detailed groups across member and info lookups", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        jsonrpc: "2.0",
+        result: [
+          {
+            id: "group-2",
+            name: "Ops",
+            members: [{ number: "+15550002222", name: "Alice" }],
+          },
+        ],
+      }),
+    );
+
+    const members = await listGroupMembersSignal("group:group-2", { cfg });
+    const group = await getGroupInfoSignal("group:group-2", { cfg });
+
+    expect(members).toEqual([{ number: "+15550002222", name: "Alice" }]);
+    expect(group).toEqual(
+      expect.objectContaining({
+        id: "group-2",
+        name: "Ops",
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("joins and quits groups via RPC", async () => {

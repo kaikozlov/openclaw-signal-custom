@@ -482,7 +482,7 @@ export async function fetchAttachment(params: {
   return { path: saved.path, contentType: saved.contentType };
 }
 
-async function deliverReplies(params: {
+export async function __deliverRepliesSignalForTests(params: {
   cfg: OpenClawConfig;
   replies: ReplyPayload[];
   target: string;
@@ -493,6 +493,7 @@ async function deliverReplies(params: {
   maxBytes: number;
   textLimit: number;
   chunkMode: "length" | "newline";
+  silent?: boolean;
   quoteAuthor?: string;
   storyTimestamp?: number;
   storyAuthor?: string;
@@ -515,16 +516,19 @@ async function deliverReplies(params: {
       params.storyTimestamp > 0 &&
       Boolean(params.storyAuthor?.trim());
     if (mediaList.length === 0) {
-      let first = true;
-      for (const chunk of getSignalRuntime().channel.text.chunkTextWithMode(
+      const chunks = getSignalRuntime().channel.text.chunkTextWithMode(
         text,
         textLimit,
         chunkMode,
-      )) {
+      );
+      for (const [index, chunk] of chunks.entries()) {
+        const first = index === 0;
+        const last = index === chunks.length - 1;
         await sendMessageSignal(target, chunk, {
           cfg,
           accountId,
           maxBytes,
+          silent: params.silent || !last ? true : undefined,
           replyTo: first && includeQuote ? replyToId : undefined,
           quoteAuthor: first && includeQuote ? params.quoteAuthor : undefined,
           storyTimestamp: first && includeStory ? params.storyTimestamp : undefined,
@@ -536,17 +540,18 @@ async function deliverReplies(params: {
         if (first && includeStory) {
           storyReplyUsed = true;
         }
-        first = false;
       }
     } else {
-      let first = true;
-      for (const url of mediaList) {
+      for (const [index, url] of mediaList.entries()) {
+        const first = index === 0;
+        const last = index === mediaList.length - 1;
         const caption = first ? text : "";
         await sendMessageSignal(target, caption, {
           cfg,
           mediaUrl: url,
           maxBytes,
           accountId,
+          silent: params.silent || !last ? true : undefined,
           replyTo: first && includeQuote ? replyToId : undefined,
           quoteAuthor: first && includeQuote ? params.quoteAuthor : undefined,
           storyTimestamp: first && includeStory ? params.storyTimestamp : undefined,
@@ -558,11 +563,29 @@ async function deliverReplies(params: {
         if (first && includeStory) {
           storyReplyUsed = true;
         }
-        first = false;
       }
     }
     runtime.log?.(`delivered reply to ${target}`);
   }
+}
+
+async function deliverReplies(params: {
+  cfg: OpenClawConfig;
+  replies: ReplyPayload[];
+  target: string;
+  baseUrl: string;
+  account?: string;
+  accountId?: string;
+  runtime: RuntimeEnv;
+  maxBytes: number;
+  textLimit: number;
+  chunkMode: "length" | "newline";
+  silent?: boolean;
+  quoteAuthor?: string;
+  storyTimestamp?: number;
+  storyAuthor?: string;
+}) {
+  return await __deliverRepliesSignalForTests(params);
 }
 
 async function waitForSignalReconnect(params: {
@@ -889,6 +912,7 @@ async function runSignalProviderCycle(params: {
         accountId: accountInfo.accountId,
       }),
       blockStreaming: accountInfo.config.blockStreaming,
+      silentIntermediateReplies: accountInfo.config.silentIntermediateReplies !== false,
       historyLimit: params.historyLimit,
       groupHistories: params.groupHistories,
       textLimit: params.textLimit,

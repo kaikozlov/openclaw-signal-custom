@@ -1,8 +1,9 @@
 import { existsSync } from "node:fs";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { signalPlugin } from "./channel.js";
 import { resolveSignalAccount } from "./config.js";
 import { setSignalRuntime } from "./runtime.js";
+import { __clearSignalDirectoryCacheForTests } from "./signal/directory.js";
 import {
   __clearSignalReactionTargetCacheForTests,
   recordSignalReactionTarget,
@@ -31,6 +32,16 @@ function makeSignalCfg(channelOverrides: Record<string, unknown> = {}) {
 }
 
 describe("signalPlugin outbound sendMedia", () => {
+  beforeEach(() => {
+    __clearSignalDirectoryCacheForTests();
+    __clearSignalReactionTargetCacheForTests();
+  });
+
+  afterEach(() => {
+    __clearSignalDirectoryCacheForTests();
+    __clearSignalReactionTargetCacheForTests();
+  });
+
   it("declares blockStreaming and mention strip patterns", () => {
     expect(signalPlugin.capabilities?.blockStreaming).toBe(true);
     expect(signalPlugin.capabilities?.edit).toBe(true);
@@ -2161,6 +2172,7 @@ describe("signalPlugin outbound sendMedia", () => {
             "signal-custom": {
               account: "+15550001111",
               httpUrl: "http://signal.local",
+              directoryRefreshTtlMs: 0,
             },
           },
         } as never,

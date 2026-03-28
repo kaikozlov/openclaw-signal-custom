@@ -195,6 +195,7 @@ export type SignalEventHandlerDeps = {
   accountId: string;
   streamMode?: SignalStreamingMode;
   blockStreaming?: boolean;
+  silentIntermediateReplies?: boolean;
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
   textLimit: number;
@@ -229,6 +230,7 @@ export type SignalEventHandlerDeps = {
     runtime: RuntimeEnv;
     maxBytes: number;
     textLimit: number;
+    silent?: boolean;
     quoteAuthor?: string;
     storyTimestamp?: number;
     storyAuthor?: string;

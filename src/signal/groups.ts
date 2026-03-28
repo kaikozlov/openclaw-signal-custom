@@ -1,3 +1,4 @@
+import { stripSignalChannelPrefix } from "../constants.js";
 import { signalRpcRequestWithRetry } from "./client.js";
 import {
   listSignalGroups,
@@ -8,26 +9,22 @@ import {
 import { resolveSignalRpcContext } from "./rpc-context.js";
 
 function normalizeSignalGroupId(raw: string): string {
-  const trimmed = raw.trim();
+  const trimmed = stripSignalChannelPrefix(raw.trim());
   if (!trimmed) {
     return "";
   }
-  return trimmed.replace(/^signal:group:/i, "").replace(/^group:/i, "").trim();
+  return trimmed.replace(/^group:/i, "").trim();
 }
 
 function normalizeSignalMemberIdentifier(raw: string): string {
-  const trimmed = raw.trim();
+  const trimmed = stripSignalChannelPrefix(raw.trim());
   if (!trimmed) {
     return "";
   }
-  const withoutSignal = trimmed.replace(/^signal:/i, "").trim();
-  if (!withoutSignal) {
-    return "";
+  if (trimmed.toLowerCase().startsWith("uuid:")) {
+    return trimmed.slice("uuid:".length).trim();
   }
-  if (withoutSignal.toLowerCase().startsWith("uuid:")) {
-    return withoutSignal.slice("uuid:".length).trim();
-  }
-  return withoutSignal;
+  return trimmed;
 }
 
 export type SignalGroupUpdate = {

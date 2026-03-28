@@ -205,6 +205,7 @@ export type SignalAccountConfig = {
   directoryRefreshTtlMs?: number;
   streaming?: SignalStreamingMode;
   blockStreaming?: boolean;
+  silentIntermediateReplies?: boolean;
   blockStreamingCoalesce?: unknown;
   heartbeat?: {
     showOk?: boolean;
@@ -355,6 +356,7 @@ export const SignalAccountSchemaBase = z
     directoryRefreshTtlMs: z.number().int().min(0).optional(),
     streaming: z.enum(["off", "block", "draft"]).optional(),
     blockStreaming: z.boolean().optional(),
+    silentIntermediateReplies: z.boolean().optional(),
     blockStreamingCoalesce: z.unknown().optional(),
     mediaMaxMb: z.number().int().positive().optional(),
     typingTtlMs: z.number().int().positive().optional(),

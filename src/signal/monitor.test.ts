@@ -376,7 +376,12 @@ describe("signal monitor event handler", () => {
         ),
       );
 
-    const deliverReplies = vi.fn(async () => {});
+    const deliverReplies = vi.fn(
+      async (_params: {
+        target: string;
+        silent?: boolean;
+      }) => {},
+    );
     const dispatchReplyWithBufferedBlockDispatcher = vi.fn(
       async ({
         replyOptions,
@@ -562,6 +567,492 @@ describe("signal monitor event handler", () => {
     } finally {
       global.fetch = originalFetch;
     }
+  });
+
+  it("marks non-final block updates silent before delivery", async () => {
+    const deliverReplies = vi.fn(async () => {});
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(
+      async ({
+        dispatcherOptions,
+      }: {
+        dispatcherOptions: {
+          deliver: (
+            payload: Record<string, unknown>,
+            info: { kind: "final" | "block" | "tool" },
+          ) => Promise<void>;
+        };
+      }) => {
+        await dispatcherOptions.deliver({ text: "working..." }, { kind: "block" });
+        await dispatcherOptions.deliver({ text: "done" }, { kind: "final" });
+        return { queuedFinal: true, counts: { tool: 0, block: 1, final: 1 } };
+      },
+    );
+
+    setSignalRuntime({
+      channel: {
+        routing: {
+          resolveAgentRoute: () => ({
+            agentId: "agent-1",
+            sessionKey: "session-1",
+            mainSessionKey: "main-session-1",
+            accountId: "default",
+          }),
+        },
+        reply: {
+          formatInboundEnvelope: ({ body }: { body: string }) => body,
+          resolveEnvelopeFormatOptions: () => undefined,
+          finalizeInboundContext: (ctx: Record<string, unknown>) => ctx,
+          dispatchReplyWithBufferedBlockDispatcher,
+          resolveHumanDelayConfig: () => undefined,
+        },
+        session: {
+          resolveStorePath: () => "/tmp/store.json",
+          readSessionUpdatedAt: () => undefined,
+          recordInboundSession: async () => {},
+        },
+        text: {
+          hasControlCommand: () => false,
+        },
+        debounce: {
+          resolveInboundDebounceMs: () => 0,
+          createInboundDebouncer: ({ onFlush }: { onFlush: (items: unknown[]) => Promise<void> }) => ({
+            enqueue: async (item: unknown) => {
+              await onFlush([item]);
+            },
+            flushKey: async () => {},
+          }),
+        },
+        mentions: {
+          buildMentionRegexes: () => [],
+          matchesMentionPatterns: () => false,
+        },
+        groups: {
+          resolveGroupPolicy: () => ({
+            allowed: false,
+            groupConfig: undefined,
+            defaultConfig: undefined,
+          }),
+          resolveRequireMention: () => false,
+        },
+        pairing: {
+          readAllowFromStore: async () => [],
+          upsertPairingRequest: async () => undefined,
+          buildPairingReply: () => "",
+        },
+      },
+      system: {
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeatNow: vi.fn(),
+      },
+      media: {
+        mediaKindFromMime: () => undefined,
+      },
+      logging: {
+        shouldLogVerbose: () => false,
+        getChildLogger: () =>
+          ({
+            info: () => {},
+            warn: () => {},
+            error: () => {},
+          }),
+      },
+    } as never);
+
+    const handler = createSignalEventHandler({
+      runtime: {
+        log: () => {},
+        error: () => {},
+        exit: () => {},
+      },
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15559990000",
+            httpUrl: "http://signal.local",
+            streaming: "block",
+          },
+        },
+      } as never,
+      baseUrl: "http://signal.local",
+      account: "+15559990000",
+      accountId: "default",
+      streamMode: "block",
+      historyLimit: 0,
+      groupHistories: new Map(),
+      textLimit: 4000,
+      dmPolicy: "open",
+      allowFrom: ["*"],
+      groupAllowFrom: [],
+      groupPolicy: "allowlist",
+      reactionMode: "own",
+      reactionAllowlist: [],
+      mediaMaxBytes: 8 * 1024 * 1024,
+      ignoreAttachments: false,
+      sendReadReceipts: false,
+      readReceiptsViaDaemon: false,
+      fetchAttachment: async () => null,
+      deliverReplies,
+      resolveSignalReactionTargets: () => [],
+      isSignalReactionMessage: isReactionMessage,
+      shouldEmitSignalReactionNotification: () => false,
+      buildSignalReactionSystemEventText: () => "",
+    });
+
+    await handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Casey",
+          timestamp: 1700000000000,
+          dataMessage: {
+            message: "hello",
+          },
+        },
+      }),
+    });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expect(deliverReplies).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        target: "+15550001111",
+        silent: true,
+      }),
+    );
+    expect(deliverReplies).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        target: "+15550001111",
+        silent: undefined,
+      }),
+    );
+  });
+
+  it("only marks the last answer-bearing final delivery urgent in block mode", async () => {
+    const deliverReplies = vi.fn(async () => {});
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(
+      async ({
+        dispatcherOptions,
+      }: {
+        dispatcherOptions: {
+          deliver: (
+            payload: Record<string, unknown>,
+            info: { kind: "final" | "block" | "tool" },
+          ) => Promise<void>;
+        };
+      }) => {
+        await dispatcherOptions.deliver({ text: "alpha" }, { kind: "final" });
+        await dispatcherOptions.deliver({ text: "beta" }, { kind: "final" });
+        return { queuedFinal: true, counts: { tool: 0, block: 0, final: 2 } };
+      },
+    );
+
+    setSignalRuntime({
+      channel: {
+        routing: {
+          resolveAgentRoute: () => ({
+            agentId: "agent-1",
+            sessionKey: "session-1",
+            mainSessionKey: "main-session-1",
+            accountId: "default",
+          }),
+        },
+        reply: {
+          formatInboundEnvelope: ({ body }: { body: string }) => body,
+          resolveEnvelopeFormatOptions: () => undefined,
+          finalizeInboundContext: (ctx: Record<string, unknown>) => ctx,
+          dispatchReplyWithBufferedBlockDispatcher,
+          resolveHumanDelayConfig: () => undefined,
+        },
+        session: {
+          resolveStorePath: () => "/tmp/store.json",
+          readSessionUpdatedAt: () => undefined,
+          recordInboundSession: async () => {},
+        },
+        text: {
+          hasControlCommand: () => false,
+        },
+        debounce: {
+          resolveInboundDebounceMs: () => 0,
+          createInboundDebouncer: ({ onFlush }: { onFlush: (items: unknown[]) => Promise<void> }) => ({
+            enqueue: async (item: unknown) => {
+              await onFlush([item]);
+            },
+            flushKey: async () => {},
+          }),
+        },
+        mentions: {
+          buildMentionRegexes: () => [],
+          matchesMentionPatterns: () => false,
+        },
+        groups: {
+          resolveGroupPolicy: () => ({
+            allowed: false,
+            groupConfig: undefined,
+            defaultConfig: undefined,
+          }),
+          resolveRequireMention: () => false,
+        },
+        pairing: {
+          readAllowFromStore: async () => [],
+          upsertPairingRequest: async () => undefined,
+          buildPairingReply: () => "",
+        },
+      },
+      system: {
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeatNow: vi.fn(),
+      },
+      media: {
+        mediaKindFromMime: () => undefined,
+      },
+      logging: {
+        shouldLogVerbose: () => false,
+        getChildLogger: () =>
+          ({
+            info: () => {},
+            warn: () => {},
+            error: () => {},
+          }),
+      },
+    } as never);
+
+    const handler = createSignalEventHandler({
+      runtime: {
+        log: () => {},
+        error: () => {},
+        exit: () => {},
+      },
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15559990000",
+            httpUrl: "http://signal.local",
+            streaming: "block",
+          },
+        },
+      } as never,
+      baseUrl: "http://signal.local",
+      account: "+15559990000",
+      accountId: "default",
+      streamMode: "block",
+      historyLimit: 0,
+      groupHistories: new Map(),
+      textLimit: 4000,
+      dmPolicy: "open",
+      allowFrom: ["*"],
+      groupAllowFrom: [],
+      groupPolicy: "allowlist",
+      reactionMode: "own",
+      reactionAllowlist: [],
+      mediaMaxBytes: 8 * 1024 * 1024,
+      ignoreAttachments: false,
+      sendReadReceipts: false,
+      readReceiptsViaDaemon: false,
+      fetchAttachment: async () => null,
+      deliverReplies,
+      resolveSignalReactionTargets: () => [],
+      isSignalReactionMessage: isReactionMessage,
+      shouldEmitSignalReactionNotification: () => false,
+      buildSignalReactionSystemEventText: () => "",
+    });
+
+    await handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Casey",
+          timestamp: 1700000000000,
+          dataMessage: {
+            message: "hello",
+          },
+        },
+      }),
+    });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expect(deliverReplies).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        target: "+15550001111",
+        silent: true,
+        replies: [expect.objectContaining({ text: "alpha" })],
+      }),
+    );
+    expect(deliverReplies).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        target: "+15550001111",
+        silent: undefined,
+        replies: [expect.objectContaining({ text: "beta" })],
+      }),
+    );
+  });
+
+  it("disables silent intermediate deliveries when configured off", async () => {
+    const deliverReplies = vi.fn(async () => {});
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(
+      async ({
+        dispatcherOptions,
+      }: {
+        dispatcherOptions: {
+          deliver: (
+            payload: Record<string, unknown>,
+            info: { kind: "final" | "block" | "tool" },
+          ) => Promise<void>;
+        };
+      }) => {
+        await dispatcherOptions.deliver({ text: "alpha" }, { kind: "final" });
+        await dispatcherOptions.deliver({ text: "beta" }, { kind: "final" });
+        return { queuedFinal: true, counts: { tool: 0, block: 0, final: 2 } };
+      },
+    );
+
+    setSignalRuntime({
+      channel: {
+        routing: {
+          resolveAgentRoute: () => ({
+            agentId: "agent-1",
+            sessionKey: "session-1",
+            mainSessionKey: "main-session-1",
+            accountId: "default",
+          }),
+        },
+        reply: {
+          formatInboundEnvelope: ({ body }: { body: string }) => body,
+          resolveEnvelopeFormatOptions: () => undefined,
+          finalizeInboundContext: (ctx: Record<string, unknown>) => ctx,
+          dispatchReplyWithBufferedBlockDispatcher,
+          resolveHumanDelayConfig: () => undefined,
+        },
+        session: {
+          resolveStorePath: () => "/tmp/store.json",
+          readSessionUpdatedAt: () => undefined,
+          recordInboundSession: async () => {},
+        },
+        text: {
+          hasControlCommand: () => false,
+        },
+        debounce: {
+          resolveInboundDebounceMs: () => 0,
+          createInboundDebouncer: ({ onFlush }: { onFlush: (items: unknown[]) => Promise<void> }) => ({
+            enqueue: async (item: unknown) => {
+              await onFlush([item]);
+            },
+            flushKey: async () => {},
+          }),
+        },
+        mentions: {
+          buildMentionRegexes: () => [],
+          matchesMentionPatterns: () => false,
+        },
+        groups: {
+          resolveGroupPolicy: () => ({
+            allowed: false,
+            groupConfig: undefined,
+            defaultConfig: undefined,
+          }),
+          resolveRequireMention: () => false,
+        },
+        pairing: {
+          readAllowFromStore: async () => [],
+          upsertPairingRequest: async () => undefined,
+          buildPairingReply: () => "",
+        },
+      },
+      system: {
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeatNow: vi.fn(),
+      },
+      media: {
+        mediaKindFromMime: () => undefined,
+      },
+      logging: {
+        shouldLogVerbose: () => false,
+        getChildLogger: () =>
+          ({
+            info: () => {},
+            warn: () => {},
+            error: () => {},
+          }),
+      },
+    } as never);
+
+    const handler = createSignalEventHandler({
+      runtime: {
+        log: () => {},
+        error: () => {},
+        exit: () => {},
+      },
+      cfg: {
+        channels: {
+          "signal-custom": {
+            account: "+15559990000",
+            httpUrl: "http://signal.local",
+            streaming: "block",
+            silentIntermediateReplies: false,
+          },
+        },
+      } as never,
+      baseUrl: "http://signal.local",
+      account: "+15559990000",
+      accountId: "default",
+      streamMode: "block",
+      silentIntermediateReplies: false,
+      historyLimit: 0,
+      groupHistories: new Map(),
+      textLimit: 4000,
+      dmPolicy: "open",
+      allowFrom: ["*"],
+      groupAllowFrom: [],
+      groupPolicy: "allowlist",
+      reactionMode: "own",
+      reactionAllowlist: [],
+      mediaMaxBytes: 8 * 1024 * 1024,
+      ignoreAttachments: false,
+      sendReadReceipts: false,
+      readReceiptsViaDaemon: false,
+      fetchAttachment: async () => null,
+      deliverReplies,
+      resolveSignalReactionTargets: () => [],
+      isSignalReactionMessage: isReactionMessage,
+      shouldEmitSignalReactionNotification: () => false,
+      buildSignalReactionSystemEventText: () => "",
+    });
+
+    await handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Casey",
+          timestamp: 1700000000000,
+          dataMessage: {
+            message: "hello",
+          },
+        },
+      }),
+    });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expect(deliverReplies).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        target: "+15550001111",
+        silent: undefined,
+        replies: [expect.objectContaining({ text: "alpha" })],
+      }),
+    );
+    expect(deliverReplies).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        target: "+15550001111",
+        silent: undefined,
+        replies: [expect.objectContaining({ text: "beta" })],
+      }),
+    );
   });
 
   it("falls back to normal delivery when a draft preview edit fails", async () => {
