@@ -45,7 +45,11 @@ export function parseQuoteTimestamp(replyToId?: string | null): number | undefin
   if (!replyToId) {
     return undefined;
   }
-  const timestamp = Number.parseInt(replyToId, 10);
+  const trimmed = replyToId.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return undefined;
+  }
+  const timestamp = Number.parseInt(trimmed, 10);
   return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : undefined;
 }
 

@@ -44,6 +44,23 @@ export function parseSignalCustomExplicitTarget(raw: string): {
   };
 }
 
+export function resolveSignalCustomCommandConversation(params: {
+  originatingTo?: string;
+  commandTo?: string;
+  fallbackTo?: string;
+}) {
+  const conversationId = [params.originatingTo, params.commandTo, params.fallbackTo]
+    .map((candidate) => {
+      const trimmed = candidate?.trim();
+      if (!trimmed) {
+        return undefined;
+      }
+      return normalizeSignalCustomMessagingTarget(trimmed);
+    })
+    .find((candidate): candidate is string => Boolean(candidate));
+  return conversationId ? { conversationId } : null;
+}
+
 export function resolveSignalCustomOutboundSessionRoute(
   params: ChannelOutboundSessionRouteParams,
 ): ChannelOutboundSessionRoute | null {

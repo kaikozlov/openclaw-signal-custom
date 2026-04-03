@@ -266,7 +266,47 @@ describe("signalPlugin outbound sendMedia", () => {
     ).toBeNull();
   });
 
+  it("resolves command conversations from Signal targets for ACP bindings", () => {
+    expect(
+      signalPlugin.bindings?.resolveCommandConversation?.({
+        accountId: "default",
+        originatingTo: "signal-custom:group:test-group",
+      }),
+    ).toEqual({ conversationId: "group:test-group" });
+
+    expect(
+      signalPlugin.bindings?.resolveCommandConversation?.({
+        accountId: "default",
+        commandTo: "signal:+15550001111",
+      }),
+    ).toEqual({ conversationId: "+15550001111" });
+
+    expect(
+      signalPlugin.bindings?.resolveCommandConversation?.({
+        accountId: "default",
+      }),
+    ).toBeNull();
+  });
+
   it("exposes Signal exec-approval integration when approvers are configured", () => {
+    const execApprovals = signalPlugin.execApprovals as {
+      auth?: {
+        getInitiatingSurfaceState?: (params: {
+          cfg: unknown;
+          accountId?: string | null;
+        }) => unknown;
+        authorizeCommand?: (params: {
+          cfg: unknown;
+          accountId?: string | null;
+          senderId?: string | null;
+          kind: "exec" | "plugin";
+        }) => unknown;
+      };
+      delivery?: {
+        hasConfiguredDmRoute?: (params: { cfg: unknown }) => boolean;
+        shouldSuppressForwardingFallback?: (params: unknown) => boolean;
+      };
+    };
     const cfg = {
       channels: {
         "signal-custom": {
@@ -286,9 +326,52 @@ describe("signalPlugin outbound sendMedia", () => {
         accountId: "default",
       }),
     ).toEqual({ kind: "enabled" });
-    expect(signalPlugin.execApprovals?.hasConfiguredDmRoute?.({ cfg })).toBe(true);
+    expect(
+      execApprovals.auth?.getInitiatingSurfaceState?.({
+        cfg,
+        accountId: "default",
+      }),
+    ).toEqual({ kind: "enabled" });
+    expect(
+      execApprovals.auth?.authorizeCommand?.({
+        cfg,
+        accountId: "default",
+        senderId: "signal-custom:+15550001111",
+        kind: "exec",
+      }),
+    ).toEqual({ authorized: true });
+    expect(
+      execApprovals.auth?.authorizeCommand?.({
+        cfg,
+        accountId: "default",
+        senderId: "+15550009999",
+        kind: "plugin",
+      }),
+    ).toEqual({
+      authorized: false,
+      reason: "❌ You are not authorized to approve plugin requests on Signal Custom.",
+    });
+    expect(
+      signalPlugin.execApprovals?.hasConfiguredDmRoute?.({ cfg }),
+    ).toBe(true);
+    expect(
+      execApprovals.delivery?.hasConfiguredDmRoute?.({ cfg }),
+    ).toBe(true);
     expect(
       signalPlugin.execApprovals?.shouldSuppressForwardingFallback?.({
+        cfg,
+        target: { channel: "signal-custom", to: "+15550001111", accountId: "default" },
+        request: {
+          id: "approval-1",
+          request: {
+            turnSourceChannel: "signal-custom",
+            turnSourceAccountId: "default",
+          },
+        },
+      } as never),
+    ).toBe(true);
+    expect(
+      execApprovals.delivery?.shouldSuppressForwardingFallback?.({
         cfg,
         target: { channel: "signal-custom", to: "+15550001111", accountId: "default" },
         request: {
@@ -303,6 +386,12 @@ describe("signalPlugin outbound sendMedia", () => {
   });
 
   it("does not advertise a DM exec-approval route for channel-only configs", () => {
+    const execApprovals = signalPlugin.execApprovals as {
+      delivery?: {
+        hasConfiguredDmRoute?: (params: { cfg: unknown }) => boolean;
+        shouldSuppressForwardingFallback?: (params: unknown) => boolean;
+      };
+    };
     const cfg = {
       channels: {
         "signal-custom": {
@@ -317,6 +406,7 @@ describe("signalPlugin outbound sendMedia", () => {
     } as never;
 
     expect(signalPlugin.execApprovals?.hasConfiguredDmRoute?.({ cfg })).toBe(false);
+    expect(execApprovals.delivery?.hasConfiguredDmRoute?.({ cfg })).toBe(false);
     expect(
       signalPlugin.execApprovals?.shouldSuppressForwardingFallback?.({
         cfg,
@@ -329,7 +419,20 @@ describe("signalPlugin outbound sendMedia", () => {
           },
         },
       } as never),
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      execApprovals.delivery?.shouldSuppressForwardingFallback?.({
+        cfg,
+        target: { channel: "signal-custom", to: "+15550001111", accountId: "default" },
+        request: {
+          id: "approval-1",
+          request: {
+            turnSourceChannel: "signal-custom",
+            turnSourceAccountId: "default",
+          },
+        },
+      } as never),
+    ).toBe(true);
     expect(
       signalPlugin.execApprovals?.shouldSuppressForwardingFallback?.({
         cfg,
@@ -343,6 +446,45 @@ describe("signalPlugin outbound sendMedia", () => {
         },
       } as never),
     ).toBe(true);
+    expect(
+      execApprovals.delivery?.shouldSuppressForwardingFallback?.({
+        cfg,
+        target: { channel: "signal-custom", to: "group:grp1", accountId: "default" },
+        request: {
+          id: "approval-2",
+          request: {
+            turnSourceChannel: "signal-custom",
+            turnSourceAccountId: "default",
+          },
+        },
+      } as never),
+    ).toBe(true);
+    expect(
+      signalPlugin.execApprovals?.shouldSuppressForwardingFallback?.({
+        cfg,
+        target: { channel: "signal-custom", to: "group:grp1", accountId: "default" },
+        request: {
+          id: "approval-3",
+          request: {
+            turnSourceChannel: "slack",
+            turnSourceAccountId: "default",
+          },
+        },
+      } as never),
+    ).toBe(false);
+    expect(
+      execApprovals.delivery?.shouldSuppressForwardingFallback?.({
+        cfg,
+        target: { channel: "signal-custom", to: "group:grp1", accountId: "default" },
+        request: {
+          id: "approval-3",
+          request: {
+            turnSourceChannel: "slack",
+            turnSourceAccountId: "default",
+          },
+        },
+      } as never),
+    ).toBe(false);
   });
 
   it("normalizes Signal threading reply transport to replyToId", () => {

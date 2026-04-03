@@ -10,6 +10,7 @@ export const SIGNAL_META = {
   docsLabel: "signal",
   blurb: "standalone Signal channel plugin with custom signal-cli transport and actions.",
   systemImage: "antenna.radiowaves.left.and.right",
+  markdownCapable: true,
 };
 
 export function stripSignalChannelPrefix(raw: string): string {

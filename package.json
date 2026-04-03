@@ -18,12 +18,12 @@
   "devDependencies": {
     "@types/markdown-it": "14.1.2",
     "@types/node": "22.18.6",
-    "openclaw": "2026.3.24",
+    "openclaw": "2026.3.28",
     "typescript": "5.9.2",
     "vitest": "3.2.4"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.3.24"
+    "openclaw": ">=2026.3.28"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -43,7 +43,8 @@
       "docsPath": "/channels/signal",
       "docsLabel": "signal",
       "blurb": "standalone Signal channel plugin with custom signal-cli transport and actions.",
-      "systemImage": "antenna.radiowaves.left.and.right"
+      "systemImage": "antenna.radiowaves.left.and.right",
+      "markdownCapable": true
     }
   }
 }

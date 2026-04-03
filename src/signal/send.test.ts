@@ -25,6 +25,16 @@ function makeResponse(params: {
   } as Response;
 }
 
+describe("parseQuoteTimestamp", () => {
+  it("accepts only fully numeric positive reply ids", () => {
+    expect(parseQuoteTimestamp("1700000002000")).toBe(1700000002000);
+    expect(parseQuoteTimestamp(" 1700000002000 ")).toBe(1700000002000);
+    expect(parseQuoteTimestamp("1700000002000abc")).toBeUndefined();
+    expect(parseQuoteTimestamp("abc1700000002000")).toBeUndefined();
+    expect(parseQuoteTimestamp("-1700000002000")).toBeUndefined();
+  });
+});
+
 describe("sendMessageSignal", () => {
   const originalFetch = global.fetch;
   const fetchMock = vi.fn<typeof fetch>();

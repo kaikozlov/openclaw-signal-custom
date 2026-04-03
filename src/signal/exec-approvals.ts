@@ -1,10 +1,10 @@
-import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/infra-runtime";
-import type { ReplyPayload } from "../runtime-api.js";
+import { getExecApprovalReplyMetadata, type ReplyPayload } from "../runtime-api.js";
 import { listSignalAccountIds, resolveSignalAccount } from "../config.js";
+import { stripSignalChannelPrefix } from "../constants.js";
 import { inferSignalCustomTargetChatType } from "../targets.js";
 
 function normalizeApproverId(value: string | number): string {
-  return String(value).trim();
+  return stripSignalChannelPrefix(String(value)).trim();
 }
 
 export function resolveSignalExecApprovalConfig(params: {
@@ -21,6 +21,18 @@ export function getSignalExecApprovalApprovers(params: {
   return (resolveSignalExecApprovalConfig(params)?.approvers ?? [])
     .map(normalizeApproverId)
     .filter(Boolean);
+}
+
+export function isSignalExecApprovalApprover(params: {
+  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
+  accountId?: string | null;
+  senderId?: string | null;
+}): boolean {
+  const senderId = params.senderId ? normalizeApproverId(params.senderId) : "";
+  if (!senderId) {
+    return false;
+  }
+  return getSignalExecApprovalApprovers(params).includes(senderId);
 }
 
 export function isSignalExecApprovalClientEnabled(params: {
@@ -41,10 +53,13 @@ export function resolveSignalExecApprovalTarget(params: {
 export function hasSignalExecApprovalDmRoute(params: {
   cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
 }): boolean {
-  return listSignalAccountIds(params.cfg).some((accountId) =>
-    isSignalExecApprovalClientEnabled({ cfg: params.cfg, accountId }) &&
-    resolveSignalExecApprovalTarget({ cfg: params.cfg, accountId }) !== "channel",
-  );
+  return listSignalAccountIds(params.cfg).some((accountId) => {
+    if (!isSignalExecApprovalClientEnabled({ cfg: params.cfg, accountId })) {
+      return false;
+    }
+    const target = resolveSignalExecApprovalTarget({ cfg: params.cfg, accountId });
+    return target === "dm" || target === "both";
+  });
 }
 
 export function isSignalExecApprovalTargetEnabled(params: {

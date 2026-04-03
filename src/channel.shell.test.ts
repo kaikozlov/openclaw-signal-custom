@@ -41,6 +41,16 @@ describe("signal plugin shell modernization", () => {
     expect(source).not.toContain(`openclaw/plugin-sdk/signal'`);
   });
 
+  it("marks the Signal Custom manifest as markdown-capable", () => {
+    const packageJsonPath = resolve(import.meta.dirname, "..", "package.json");
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
+      openclaw?: { channel?: { markdownCapable?: boolean } };
+    };
+
+    expect(packageJson.openclaw?.channel?.markdownCapable).toBe(true);
+    expect(signalPlugin.meta.markdownCapable).toBe(true);
+  });
+
   it("exposes config-backed DM/group allowlist editing surfaces", async () => {
     const allowlist = signalPlugin.allowlist;
     expect(allowlist?.supportsScope?.({ scope: "dm" })).toBe(true);

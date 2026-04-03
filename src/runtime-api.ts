@@ -136,6 +136,10 @@ export {
   resolveAckReaction,
 } from "openclaw/plugin-sdk/agent-runtime";
 export {
+  getExecApprovalReplyMetadata,
+} from "openclaw/plugin-sdk/approval-runtime";
+export { createApproverRestrictedNativeApprovalAdapter } from "./approval-runtime-compat.js";
+export {
   attachChannelToResult,
   attachChannelToResults,
   createEmptyChannelResult,

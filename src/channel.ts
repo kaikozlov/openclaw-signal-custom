@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   createChatChannelPlugin,
+  createApproverRestrictedNativeApprovalAdapter,
   collectStatusIssuesFromLastError,
   createActionGate,
   jsonResult,
@@ -47,9 +48,10 @@ import { removeReactionSignal, sendReactionSignal } from "./signal/send-reaction
 import { listSignalContacts, listSignalGroups } from "./signal/directory.js";
 import { resolveSignalGroupRuntimeConfig } from "./signal/group-config.js";
 import {
-  hasSignalExecApprovalDmRoute,
-  isSignalExecApprovalTargetEnabled,
+  getSignalExecApprovalApprovers,
+  isSignalExecApprovalApprover,
   isSignalExecApprovalClientEnabled,
+  resolveSignalExecApprovalTarget,
   shouldSuppressLocalSignalExecApprovalPrompt,
 } from "./signal/exec-approvals.js";
 import {
@@ -69,6 +71,7 @@ import {
   looksLikeSignalCustomTargetId,
   normalizeSignalCustomMessagingTarget,
   parseSignalCustomExplicitTarget,
+  resolveSignalCustomCommandConversation,
   resolveSignalCustomOutboundSessionRoute,
 } from "./targets.js";
 import { type SignalProbe } from "./signal/probe.js";
@@ -107,10 +110,22 @@ function matchSignalBindingConversation(params: {
   return null;
 }
 
-function isSignalChannelId(value: string | null | undefined): boolean {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === "signal" || normalized === SIGNAL_CHANNEL_ID;
-}
+const signalNativeApprovalAdapter = createApproverRestrictedNativeApprovalAdapter({
+  channel: SIGNAL_CHANNEL_ID,
+  channelLabel: "Signal Custom",
+  listAccountIds: listSignalAccountIds,
+  hasApprovers: ({ cfg, accountId }) =>
+    getSignalExecApprovalApprovers({ cfg, accountId }).length > 0,
+  isExecAuthorizedSender: ({ cfg, accountId, senderId }) =>
+    isSignalExecApprovalApprover({ cfg, accountId, senderId }),
+  isNativeDeliveryEnabled: ({ cfg, accountId }) =>
+    isSignalExecApprovalClientEnabled({ cfg, accountId }),
+  resolveNativeDeliveryMode: ({ cfg, accountId }) =>
+    resolveSignalExecApprovalTarget({ cfg, accountId }),
+  requireMatchingTurnSourceChannel: true,
+  resolveSuppressionAccountId: ({ target, request }) =>
+    target.accountId?.trim() || request.request.turnSourceAccountId?.trim() || undefined,
+});
 
 const SIGNAL_GROUP_MANAGEMENT_ACTIONS = [
   "renameGroup",
@@ -1511,6 +1526,19 @@ const signalOutbound = {
   },
 };
 
+const signalExecApprovalSurface = {
+  getInitiatingSurfaceState: signalNativeApprovalAdapter.auth.getInitiatingSurfaceState,
+  shouldSuppressLocalPrompt: shouldSuppressLocalSignalExecApprovalPrompt,
+  hasConfiguredDmRoute: signalNativeApprovalAdapter.delivery.hasConfiguredDmRoute,
+  shouldSuppressForwardingFallback:
+    signalNativeApprovalAdapter.delivery.shouldSuppressForwardingFallback,
+  auth: signalNativeApprovalAdapter.auth,
+  delivery: {
+    ...signalNativeApprovalAdapter.delivery,
+    shouldSuppressLocalPrompt: shouldSuppressLocalSignalExecApprovalPrompt,
+  },
+};
+
 export const signalPlugin = createChatChannelPlugin<ResolvedSignalAccount, SignalProbe>({
   base: {
     ...createSignalCustomPluginBase(),
@@ -1560,30 +1588,14 @@ export const signalPlugin = createChatChannelPlugin<ResolvedSignalAccount, Signa
           conversationId,
           parentConversationId,
         }),
+      resolveCommandConversation: ({ originatingTo, commandTo, fallbackTo }) =>
+        resolveSignalCustomCommandConversation({
+          originatingTo,
+          commandTo,
+          fallbackTo,
+        }),
     },
-    execApprovals: {
-      getInitiatingSurfaceState: ({ cfg, accountId }) =>
-        isSignalExecApprovalClientEnabled({ cfg, accountId })
-          ? { kind: "enabled" }
-          : { kind: "disabled" },
-      shouldSuppressLocalPrompt: ({ cfg, accountId, payload }) =>
-        shouldSuppressLocalSignalExecApprovalPrompt({ cfg, accountId, payload }),
-      hasConfiguredDmRoute: ({ cfg }) => hasSignalExecApprovalDmRoute({ cfg }),
-      shouldSuppressForwardingFallback: ({ cfg, target, request }) => {
-        if (!isSignalChannelId(target.channel)) {
-          return false;
-        }
-        if (!isSignalChannelId(request.request.turnSourceChannel ?? "")) {
-          return false;
-        }
-        const accountId = target.accountId?.trim() || request.request.turnSourceAccountId?.trim();
-        return isSignalExecApprovalTargetEnabled({
-          cfg,
-          accountId,
-          to: target.to,
-        });
-      },
-    },
+    execApprovals: signalExecApprovalSurface as never,
     threading: {
       resolveReplyToMode: ({ cfg, accountId }) =>
         resolveSignalAccount({ cfg, accountId }).config.replyToMode ?? "all",
